@@ -47,7 +47,13 @@ void main() {
     // Environment component
 
     // your code here
-    total += vec3(0) * u_EnvironmentScale;
+    // vec4  eFactor  = texture(u_EnvironmentMap , v_Position).rgba;
+    vec3 I = -viewDir;
+    vec3 R = reflect(I, normal);
+    vec4  eFactor  = texture(u_EnvironmentMap , R).rgba;
+    vec3  eColor   = pow(eFactor.rgb, vec3(gamma));
+
+    total += u_EnvironmentScale*eColor;
 
     // Iterate lights.
     for (int i = 0; i < u_CntPointLights; i++) {

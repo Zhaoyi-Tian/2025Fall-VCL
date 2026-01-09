@@ -38,7 +38,20 @@ uniform sampler2D u_HeightMap;
 
 vec3 Shade(vec3 lightIntensity, vec3 lightDir, vec3 normal, vec3 viewDir, vec3 diffuseColor, vec3 specularColor, float shininess) {
     // your code here:
-    return vec3(0);
+    float diff = max(dot(normal, lightDir), 0.0);
+    float spec = 0.0;
+    if (diff > 0.0) { 
+        float specAngle = 0.0;
+        if (u_UseBlinn) {
+            vec3 halfDir = normalize(lightDir + viewDir);
+            specAngle = max(dot(normal, halfDir), 0.0);
+        } else {
+            vec3 reflectDir = reflect(-lightDir, normal);
+            specAngle = max(dot(viewDir, reflectDir), 0.0);
+        }
+        spec = pow(specAngle, shininess);
+    }
+    return lightIntensity * (diffuseColor * diff + specularColor * spec);
 }
 
 vec3 GetNormal() {
@@ -46,8 +59,18 @@ vec3 GetNormal() {
     vec3 vn = normalize(v_Normal);
 
     // your code here:
-    vec3 bumpNormal = vn;
+    vec3 sigmaS = dFdx(v_Position);
+    vec3 sigmaT = dFdy(v_Position);
+    vec3 r1 = cross(sigmaT, vn);
+    vec3 r2 = cross(vn, sigmaS);
+    float det = dot(sigmaS, r1);
 
+    float h = texture(u_HeightMap, v_TexCoord).r;
+    float dHdS = dFdx(h);
+    float dHdT = dFdy(h);
+
+    vec3 surfGrad = abs(det) > 0.0 ? sign(det) * (dHdS * r1 + dHdT * r2) / abs(det) : vec3(0.0);
+    vec3 bumpNormal = normalize(vn - surfGrad);
     return bumpNormal != bumpNormal ? vn : normalize(vn * (1. - u_BumpMappingBlend) + bumpNormal * u_BumpMappingBlend);
 }
 

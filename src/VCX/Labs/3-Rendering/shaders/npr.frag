@@ -29,12 +29,29 @@ uniform vec3 u_WarmColor;
 
 vec3 Shade (vec3 lightDir, vec3 normal) {
     // your code here:
-    return vec3(0);
+    vec3 k;
+    float NdotL = dot(lightDir, normal);
+    float alpha = (1.0 + NdotL) / 2.0;
+    int u_ColorSteps=3;
+    float quantizedAlpha = floor(alpha * u_ColorSteps) / u_ColorSteps;
+    k=(1-quantizedAlpha)*u_CoolColor+quantizedAlpha*u_WarmColor;
+    return k;
 }
 
 void main() {
     // your code here:
     float gamma = 2.2;
-    vec3 total = Shade(u_Lights[0].Direction, v_Normal);
+    vec3 ambientLinear = pow(u_AmbientIntensity, vec3(gamma));
+    vec3 normal = normalize(v_Normal);
+    vec3 total = ambientLinear;
+    for(int i=0;i<u_CntPointLights;i++){
+        vec3 lightDir   = normalize(u_Lights[i].Position - v_Position);
+        float dist      = length(u_Lights[i].Position - v_Position);
+        float attenuation = 1.0 / (dist * dist);
+        total += Shade(lightDir, normal)*attenuation*u_Lights[i].Intensity;
+    }
+    for(int i=u_CntPointLights+u_CntSpotLights;i<u_CntDirectionalLights+u_CntSpotLights+u_CntPointLights;i++){
+        total += Shade(u_Lights[i].Direction, normal)*u_Lights[i].Intensity;
+    }
     f_Color = vec4(pow(total, vec3(1. / gamma)), 1.);
 }
