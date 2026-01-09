@@ -14,6 +14,13 @@ namespace VCX::Engine {
     float                                   GetFramesPerSecond();
     std::pair<std::uint32_t, std::uint32_t> GetCurrentWindowSize();
     std::pair<std::uint32_t, std::uint32_t> GetCurrentFrameSize();
+    
+    // Build ImGui font atlas from a list of font paths.
+    // Supports ".ttf" and ".ttc#<face>" (or ".ttc#<face>.ttf") syntax and
+    // merges CJK glyphs into the base Latin font to render Chinese properly.
+    // This only builds the Fonts atlas; caller remains responsible for
+    // destroying/creating the GL font texture when needed.
+    void                                   ImGuiBuildFonts(std::span<std::string_view const> fontPaths, float fontSize);
 
     /**
      * @brief The interface of applications, used as the base class.

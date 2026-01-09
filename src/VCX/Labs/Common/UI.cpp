@@ -62,27 +62,6 @@ namespace VCX::Labs::Common {
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + _layout.Spacing * 6);
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + _layout.Spacing * 3);
         ImGui::AlignTextToFramePadding();
-        ImGui::Text("EXPLORER");
-
-        ImGui::SetCursorScreenPos(_layout.CaseChildPosition);
-        ImGui::BeginChild("Case Child", _layout.CaseChildSize);
-        ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign, { .0f, .5f });
-        for (std::size_t i = 0; i < cases.size(); ++i) {
-            if (ImGui::Selectable(
-                    (fmt::format("     Case {}: {}", i + 1, cases[i].get().GetName()) + '\0').c_str(),
-                    caseId == i,
-                    0,
-                    ImVec2(0, ImGui::GetTextLineHeight() + 3 * _style.FramePadding.y)))
-                newCaseId = i;
-        }
-        ImGui::PopStyleVar();
-        ImGui::EndChild();
-
-        ImGui::Separator();
-
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + _layout.Spacing * 6);
-        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + _layout.Spacing * 3);
-        ImGui::AlignTextToFramePadding();
         ImGui::Text("PROPERTIES");
 
         ImGui::SetCursorScreenPos(_layout.UserChildPosition);
@@ -229,10 +208,8 @@ namespace VCX::Labs::Common {
         
         ImGui::GetIO().Fonts->Clear();
         float const fontSize = std::floor(ImGuiGetDefaultFontSize() * _scaleUI);
-        for (auto const & fontPath : ImGuiGetDefaultFontFileNames()) {
-            assert(*(fontPath.cend()) == '\0');
-            ImGui::GetIO().Fonts->AddFontFromFileTTF(fontPath.data(), fontSize);
-        }
+        // Rebuild with TTC parsing and CJK merge support
+        VCX::Engine::ImGuiBuildFonts(ImGuiGetDefaultFontFileNames(), fontSize);
         
         ImGui_ImplOpenGL3_CreateFontsTexture();
     }
@@ -256,19 +233,13 @@ namespace VCX::Labs::Common {
                 std::floor(_options.SideWindowWidth * _scaleUI),
                 1.f * windowHeight
             };
-            _layout.CaseChildPosition = {
+            _layout.CaseChildPosition = { 0, 0 };
+            _layout.CaseChildSize = { 0, 0 };
+            _layout.UserChildPosition = {
                 _layout.SideWindowPosition.x,
                 _layout.SideWindowPosition.y + fontSize + 2 * framePadding.y + 6 * _layout.Spacing
             };
-            _layout.CaseChildSize = {
-                _layout.SideWindowSize.x,
-                std::floor(_layout.SideWindowSize.y * .5f) - _layout.CaseChildPosition.y
-            };
-            _layout.UserChildPosition = {
-                _layout.SideWindowPosition.x,
-                _layout.CaseChildPosition.y + _layout.CaseChildSize.y + fontSize + 2 * framePadding.y + 6 * _layout.Spacing
-            };
-            _layout.CaseChildSize = {
+            _layout.UserChildSize = {
                 _layout.SideWindowSize.x,
                 _layout.SideWindowSize.y - _layout.UserChildPosition.y
             };

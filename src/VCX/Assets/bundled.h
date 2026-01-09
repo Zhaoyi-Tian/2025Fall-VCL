@@ -13,6 +13,7 @@ namespace VCX::Assets {
 
     inline constexpr auto DefaultFonts {
         std::to_array<std::string_view>({
+            "assets/fonts/NotoSansCJK-Regular.ttc#7.ttf",
             "assets/fonts/Ubuntu.ttf",
             "assets/fonts/UbuntuMono.ttf",
         })

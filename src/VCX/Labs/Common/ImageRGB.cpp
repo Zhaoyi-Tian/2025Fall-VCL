@@ -24,6 +24,12 @@ namespace VCX::Labs::Common {
         return image;
     }
 
+    ImageRGBA CreatePureImageRGBA(std::size_t const width, std::size_t const height, glm::vec4 const & color) {
+        ImageRGBA image(width, height);
+        image.Fill(color);
+        return image;
+    }
+
     ImageRGB AlphaBlend(ImageRGBA const & source, ImageRGB const & dest) {
         if (source.GetSize() != dest.GetSize()) {
             spdlog::error("VCX::Labs::Common::AlphaBlend(..): incompatible size.");
@@ -35,7 +41,7 @@ namespace VCX::Labs::Common {
         for (std::size_t x = 0; x < width; ++x)
             for (std::size_t y = 0; y < height; ++y) {
                 auto const c = source.At(x, y);
-                result.At(x, y) = glm::vec3(c.r, c.g, c.b) * c.a + dest.At(x, y) * (1 - c.a); 
+                result.At(x, y) = glm::vec3(c.r, c.g, c.b) * c.a + dest.At(x, y) * (1 - c.a);
             }
         return result;
     }

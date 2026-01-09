@@ -8,6 +8,7 @@ namespace VCX::Labs::Common {
 
 	ImageRGB CreatePureImageRGB(std::size_t const width, std::size_t const height, glm::vec3 const & color);
 	ImageRGB CreateCheckboardImageRGB(std::size_t const width, std::size_t const height, std::size_t const delta = 32);
+	ImageRGBA CreatePureImageRGBA(std::size_t const width, std::size_t const height, glm::vec4 const & color);
 
 	ImageRGB AlphaBlend(ImageRGBA const & source, ImageRGB const & dest);
 }

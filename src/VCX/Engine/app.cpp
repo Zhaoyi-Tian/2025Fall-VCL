@@ -1,5 +1,9 @@
 #include <cassert>
 #include <cstdlib>
+#include <algorithm>
+#include <string>
+#include <vector>
+#include <cctype>
 
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
@@ -36,6 +40,117 @@ namespace VCX::Engine {
     float                                   GetFramesPerSecond() { return g_FramesPerSecond; }
     std::pair<std::uint32_t, std::uint32_t> GetCurrentWindowSize() { return g_WindowSize; }
     std::pair<std::uint32_t, std::uint32_t> GetCurrentFrameSize() { return g_FrameSize; }
+
+    // Helper: parse TTC face index from path.
+    // Accepts patterns like:
+    //  - ".../font.ttc#7"
+    //  - ".../font.ttc#7.ttf" (compat with existing path style)
+    // Returns pair {cleanPath, faceIndex}
+    static std::pair<std::string, int> ParseTtcFace(std::string_view path) {
+        std::string p(path);
+        int face = 0;
+        auto pos = p.rfind(".ttc#");
+        if (pos != std::string::npos) {
+            auto tail = p.substr(pos + 5); // after ".ttc#"
+            // strip optional trailing ".ttf"
+            if (tail.size() >= 4 && tail.compare(tail.size()-4, 4, ".ttf") == 0) {
+                tail.erase(tail.size()-4);
+            }
+            // parse integer
+            face = std::atoi(tail.c_str());
+            p = p.substr(0, pos + 4); // keep up to ".ttc"
+        }
+        return { std::move(p), face };
+    }
+
+    // Heuristics to decide if a font likely contains CJK glyphs.
+    static bool IsLikelyCJKFont(std::string const & path) {
+        auto lower = path;
+        std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c){ return (char)std::tolower(c); });
+        return (lower.find(".ttc") != std::string::npos) ||
+               (lower.find("cjk") != std::string::npos) ||
+               (lower.find("noto") != std::string::npos && lower.find("sans") != std::string::npos && (lower.find("cj") != std::string::npos));
+    }
+
+    // Heuristics to detect monospace fonts.
+    static bool IsLikelyMonoFont(std::string const & path) {
+        auto lower = path;
+        std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c){ return (char)std::tolower(c); });
+        return lower.find("mono") != std::string::npos;
+    }
+
+    void ImGuiBuildFonts(std::span<std::string_view const> fontPaths, float fontSize) {
+        ImGuiIO &io = ImGui::GetIO();
+
+        // Partition fonts: latin base, cjk list (merge), mono list (added separately)
+        std::string                 baseLatinPath;
+        int                         baseLatinFace = 0;
+        std::vector<std::pair<std::string,int>> cjkFonts;
+        std::vector<std::pair<std::string,int>> monoFonts;
+        std::vector<std::pair<std::string,int>> otherFonts;
+
+        for (auto const &sv : fontPaths) {
+            std::string path(sv);
+            auto [clean, face] = ParseTtcFace(path);
+            if (IsLikelyMonoFont(clean)) {
+                monoFonts.emplace_back(std::move(clean), face);
+            } else if (IsLikelyCJKFont(clean)) {
+                cjkFonts.emplace_back(std::move(clean), face);
+            } else {
+                if (baseLatinPath.empty()) { baseLatinPath = clean; baseLatinFace = face; }
+                else                       { otherFonts.emplace_back(std::move(clean), face); }
+            }
+        }
+
+        // If no explicit latin base found, fall back to first non-mono font as base
+        if (baseLatinPath.empty()) {
+            if (!otherFonts.empty()) {
+                baseLatinPath = otherFonts.front().first;
+                baseLatinFace = otherFonts.front().second;
+                otherFonts.erase(otherFonts.begin());
+            } else if (!cjkFonts.empty()) {
+                baseLatinPath = cjkFonts.front().first;
+                baseLatinFace = cjkFonts.front().second;
+                cjkFonts.erase(cjkFonts.begin());
+            } else if (!monoFonts.empty()) {
+                baseLatinPath = monoFonts.front().first;
+                baseLatinFace = monoFonts.front().second;
+                monoFonts.erase(monoFonts.begin());
+            }
+        }
+
+        // Build fonts: base latin
+        if (!baseLatinPath.empty()) {
+            ImFontConfig cfg{};
+            cfg.MergeMode = false;
+            cfg.FontNo    = baseLatinFace;
+            io.Fonts->AddFontFromFileTTF(baseLatinPath.c_str(), fontSize, &cfg, io.Fonts->GetGlyphRangesDefault());
+        }
+
+        // Merge CJK ranges into base to support Chinese
+        for (auto const &[p, face] : cjkFonts) {
+            ImFontConfig cfg{};
+            cfg.MergeMode = true;
+            cfg.FontNo    = face;
+            io.Fonts->AddFontFromFileTTF(p.c_str(), fontSize, &cfg, io.Fonts->GetGlyphRangesChineseFull());
+        }
+
+        // Add mono fonts as standalone (index becomes Fonts[1] if one exists)
+        for (auto const &[p, face] : monoFonts) {
+            ImFontConfig cfg{};
+            cfg.MergeMode = false;
+            cfg.FontNo    = face;
+            io.Fonts->AddFontFromFileTTF(p.c_str(), fontSize, &cfg, io.Fonts->GetGlyphRangesDefault());
+        }
+
+        // Any remaining fonts: add as standalone with default ranges
+        for (auto const &[p, face] : otherFonts) {
+            ImFontConfig cfg{};
+            cfg.MergeMode = false;
+            cfg.FontNo    = face;
+            io.Fonts->AddFontFromFileTTF(p.c_str(), fontSize, &cfg, io.Fonts->GetGlyphRangesDefault());
+        }
+    }
 }
 
 namespace VCX::Engine::Internal {
@@ -79,7 +194,7 @@ namespace VCX::Engine::Internal {
         glfwShowWindow(g_glfwWindow);
         while (! glfwWindowShouldClose(g_glfwWindow)) {
             RunApp_Frame(app);
-            glfwPollEvents();
+            glfwPollEvents(); 
         }
     }
 
@@ -166,12 +281,10 @@ namespace VCX::Engine::Internal {
 
     static void RunApp_InitImGui(AppContextOptions const & options) {
         ImGui::CreateContext();
-        for (auto const & fontFileName : options.FontFileNames) {
-            assert(*(fontFileName.cend()) == '\0');
-            ImGui::GetIO().Fonts->AddFontFromFileTTF(fontFileName.data(), options.FontSize);
-        }
+        ImGuiBuildFonts(options.FontFileNames, options.FontSize);
         ImGui::GetIO().IniFilename = nullptr;
         ImGui::GetIO().LogFilename = nullptr;
+        ImGui::GetIO().MouseDragThreshold = 1.0f;  // 降低拖动阈值（默认是 6.0f）
 
         ImGui_ImplOpenGL3_Init();
         ImGui_ImplGlfw_InitForOpenGL(g_glfwWindow, true);
