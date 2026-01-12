@@ -19,7 +19,7 @@ namespace VCX::Labs::labf {
 
         // EdWordle 参数
         float alpha = 0.1f;              // 中心力权重 (公式 3)
-        float beta = 1.0f;               // 力衰减系数 (公式 4)
+        float beta = 1.0f;               // 力衰减系数 (公式 4): g(t) = β/(t+1)
         float lambda = 0.8f;             // 速度阻尼系数 (公式 4)
 
         // 碰撞参数
@@ -27,18 +27,6 @@ namespace VCX::Labs::labf {
 
         // 时间步参数
         float fixedDt = 1.0f / 120.0f;   // 固定时间步（秒）
-
-        // 衰减模式参数
-        enum class DecayMode {
-            Exponential,   // 指数衰减（正常模式）
-            FastDecay,     // 快速衰减（论文 g(t) = β/(t+1)）
-            Shuffle        // 随机打乱模式（线性退火）
-        };
-        DecayMode decayMode = DecayMode::Exponential;
-        float exponentialDecay = 0.95f;  // 指数衰减系数（0.9-0.99）
-        int decayStepsRemaining = 0;     // 特殊衰减模式剩余步数
-        int decayStepsTotal = 80;        // 特殊衰减模式总步数
-        float shuffleStrength = 100.0f;  // 打乱时的扰动强度
     };
 
     // ============================================================
@@ -371,35 +359,6 @@ namespace VCX::Labs::labf {
             _frameCount = 0;
         }
 
-        // 启动快速衰减模式（论文 g(t) = β/(t+1)）
-        void StartFastDecay(PhysicsParams& params) {
-            params.decayMode = PhysicsParams::DecayMode::FastDecay;
-            params.decayStepsRemaining = params.decayStepsTotal;
-            _frameCount = 0;  // 重置帧计数器
-        }
-
-        // 启动随机打乱模式
-        void StartShuffle(std::vector<WordEntity>& words, PhysicsParams& params) {
-            params.decayMode = PhysicsParams::DecayMode::Shuffle;
-            params.decayStepsRemaining = params.decayStepsTotal;
-
-            // 随机重新分布词的位置
-            std::random_device rd;
-            std::mt19937 gen(rd());
-            std::uniform_real_distribution<float> distX(params.canvasCenter.x - 300.0f, params.canvasCenter.x + 300.0f);
-            std::uniform_real_distribution<float> distY(params.canvasCenter.y - 200.0f, params.canvasCenter.y + 200.0f);
-            std::uniform_real_distribution<float> distVel(-params.shuffleStrength, params.shuffleStrength);
-
-            for (auto& w : words) {
-                if (w.isHighlighted) continue;
-                // 随机位置
-                w.position = glm::vec2(distX(gen), distY(gen));
-                // 随机速度扰动
-                w.velocity = glm::vec2(distVel(gen), distVel(gen));
-                // OBB 不需要更新，因为 GetWordOBB 会动态计算
-            }
-        }
-
         // 每帧调用，使用指定的时间步
         void Update(std::vector<WordEntity>& words, float dt, PhysicsParams& params) {
             if (dt <= 0 || words.empty()) return;
@@ -409,39 +368,9 @@ namespace VCX::Labs::labf {
     private:
         int _frameCount = 0;      // 物理步计数器，用于力衰减 g(t) = β/(t+1)
 
-        // 计算当前衰减因子
-        float ComputeDecayFactor(PhysicsParams& params) {
-            switch (params.decayMode) {
-            case PhysicsParams::DecayMode::FastDecay: {
-                // 论文公式 g(t) = β/(t+1)
-                float g = params.beta / (float)(_frameCount + 1);
-                // 递减剩余步数
-                if (params.decayStepsRemaining > 0) {
-                    params.decayStepsRemaining--;
-                    if (params.decayStepsRemaining == 0) {
-                        params.decayMode = PhysicsParams::DecayMode::Exponential;
-                    }
-                }
-                return g;
-            }
-            case PhysicsParams::DecayMode::Shuffle: {
-                // 线性退火：从 1.0 线性衰减到 0.0
-                float t = (float)(params.decayStepsTotal - params.decayStepsRemaining) / (float)params.decayStepsTotal;
-                float factor = 1.0f - t;
-                // 递减剩余步数
-                if (params.decayStepsRemaining > 0) {
-                    params.decayStepsRemaining--;
-                    if (params.decayStepsRemaining == 0) {
-                        params.decayMode = PhysicsParams::DecayMode::Exponential;
-                    }
-                }
-                return factor;
-            }
-            case PhysicsParams::DecayMode::Exponential:
-            default:
-                // 指数衰减：每步乘以 exponentialDecay
-                return params.exponentialDecay;
-            }
+        // 计算当前衰减因子：g(t) = β/(t+1)
+        float ComputeDecayFactor(PhysicsParams const& params) {
+            return params.beta / (float)(_frameCount + 1);
         }
 
         // 单步物理模拟（固定 dt）
@@ -456,6 +385,10 @@ namespace VCX::Labs::labf {
                 if (!w.isHighlighted) {
                     // 速度积分
                     w.velocity += w.forceAccumulator / w.mass * dt;
+
+                    // 应用速度阻尼（论文公式 4）
+                    w.velocity *= params.lambda;
+
                     // 位置积分
                     w.position += w.velocity * dt;
                 }

@@ -1,4 +1,5 @@
 #pragma once
+#include "Config/Fonts.h"
 #include "MSDFTextRenderer.h"
 #include "WordManager.h"
 #include "WordEntity.h"
@@ -24,8 +25,16 @@ public:
     ~WordCloudRenderer();
 
     /// Initialize with font file path
+    /// @param fontPath Path to TTF/TTC font file (empty = auto-detect from fonts_wordcloud directory)
+    bool Initialize(const std::string& fontPath = {});
+
+    /// Set font file path (reinitialize MSDF Atlas if changed)
     /// @param fontPath Path to TTF/TTC font file
-    bool Initialize(const std::string& fontPath = "assets/fonts/NotoSansCJK-Regular.ttc");
+    /// @return true if font was set successfully
+    bool SetFont(const std::string& fontPath);
+
+    /// 获取当前字体路径
+    const std::string& GetCurrentFontPath() const { return _currentFontPath; }
 
     // 渲染所有词到内部 Frame，返回 Frame 的颜色纹理引用
     // bgColor: 背景颜色 (RGBA)
@@ -62,4 +71,5 @@ private:
     std::unique_ptr<MSDFTextRenderer> _textRenderer;
     VCX::Engine::GL::UniqueRenderFrame _frame;
     bool _initialized;
+    std::string _currentFontPath;
 };

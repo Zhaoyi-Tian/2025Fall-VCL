@@ -15,12 +15,39 @@ WordCloudRenderer::~WordCloudRenderer() {
 bool WordCloudRenderer::Initialize(const std::string& fontPath) {
     if (_initialized) return true;
 
+    // 自动检测字体：如果未指定路径，从扫描列表中获取第一个
+    std::string actualPath = fontPath;
+    if (actualPath.empty()) {
+        const auto& fonts = GetWordCloudFonts();
+        if (!fonts.empty()) {
+            actualPath = fonts[0].path;
+        } else {
+            return false;  // 没有字体可用
+        }
+    }
+
+    _currentFontPath = actualPath;
+    _textRenderer = std::make_unique<MSDFTextRenderer>();
+    if (!_textRenderer->Initialize(actualPath)) {
+        return false;
+    }
+
+    _initialized = true;
+    return true;
+}
+
+bool WordCloudRenderer::SetFont(const std::string& fontPath) {
+    if (_initialized && _currentFontPath == fontPath) {
+        return true;  // 相同字体，无需重新初始化
+    }
+
+    // 重新初始化 MSDF Atlas
     _textRenderer = std::make_unique<MSDFTextRenderer>();
     if (!_textRenderer->Initialize(fontPath)) {
         return false;
     }
 
-    _initialized = true;
+    _currentFontPath = fontPath;
     return true;
 }
 

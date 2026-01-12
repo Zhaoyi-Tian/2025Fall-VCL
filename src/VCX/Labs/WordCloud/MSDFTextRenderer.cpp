@@ -80,21 +80,21 @@ void MSDFTextRenderer::GenerateTextVertices(const std::string& text,
     float totalWidth = 0.0f;
     float minY = 0.0f;
     float maxY = 0.0f;
-    {
-        const char* ptr = text.c_str();
-        const char* end = ptr + text.size();
-        while (ptr < end) {
-            uint32_t codepoint = DecodeUTF8(ptr, end);
-            if (codepoint == 0) break;
 
-            const auto& glyph = _atlas->GetGlyph(codepoint);
-            if (glyph.valid) {
-                totalWidth += glyph.advance * scale;
-                float y0 = glyph.planeBoundsMin.y * scale;
-                float y1 = glyph.planeBoundsMax.y * scale;
-                if (y0 < minY) minY = y0;
-                if (y1 > maxY) maxY = y1;
-            }
+    const char* ptr = text.c_str();
+    const char* end = ptr + text.size();
+
+    while (ptr < end) {
+        uint32_t codepoint = DecodeUTF8(ptr, end);
+        if (codepoint == 0) break;
+
+        const auto& glyph = _atlas->GetGlyph(codepoint);
+        if (glyph.valid) {
+            totalWidth += glyph.advance * scale;
+            float y0 = glyph.planeBoundsMin.y * scale;
+            float y1 = glyph.planeBoundsMax.y * scale;
+            if (y0 < minY) minY = y0;
+            if (y1 > maxY) maxY = y1;
         }
     }
 
@@ -112,8 +112,7 @@ void MSDFTextRenderer::GenerateTextVertices(const std::string& text,
     glm::vec2 center = position;
 
     // Second pass: generate vertices
-    const char* ptr = text.c_str();
-    const char* end = ptr + text.size();
+    ptr = text.c_str();
 
     while (ptr < end) {
         uint32_t codepoint = DecodeUTF8(ptr, end);
@@ -177,36 +176,37 @@ void MSDFTextRenderer::Render(const glm::mat4& projection) {
     if (!_initialized || !_renderItem || !_program) return;
     if (_vertices.empty()) return;
 
-    // Update vertex buffer
+    // 1. 更新 GPU 缓冲区数据
     _renderItem->UpdateVertexBuffer("vertex",
         std::span<const std::byte>(
             reinterpret_cast<const std::byte*>(_vertices.data()),
             _vertices.size() * sizeof(TextVertex)
         )
     );
-
-    // Update index buffer
     _renderItem->UpdateElementBuffer(_indices);
 
-    // Set uniforms
-    float pxRange = static_cast<float>(_atlas->GetPxRange());
+    // 2. 设置着色器 Uniform 变量
     _program->GetUniforms().SetByName("uProjection", projection);
     _program->GetUniforms().SetByName("uMSDFTexture", 0);
-    _program->GetUniforms().SetByName("uPxRange", pxRange);
 
-    // Bind MSDF texture
+    // 3. 绑定纹理
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, _atlas->GetTextureID());
 
-    // Enable blending for text rendering
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    // 4. 【抗锯齿设置】开启硬件多重采样（需窗口初始化支持）
+    glEnable(GL_MULTISAMPLE);
 
-    // Draw
+    // 5. 【预乘 Alpha 混合模式】
+    // Shader 里已经将 RGB 乘以 Alpha，这里不需要重复乘
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+
+    // 6. 执行绘制
     _renderItem->Draw({_program->Use()});
 
-    // Disable blending
+    // 7. 恢复状态
     glDisable(GL_BLEND);
+    glDisable(GL_MULTISAMPLE);
 }
 
 } // namespace VCX::Labs::labf

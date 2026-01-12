@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Config/Fonts.h"
 #include "Engine/Async.hpp"
 #include "Labs/Common/ICase.h"
 #include "Labs/Common/ImageRGB.h"
@@ -56,6 +57,9 @@ namespace VCX::Labs::labf {
 
         // 全局角度锁定
         float _lockAngle = 0.0f;
+
+        // 字体设置
+        std::size_t _currentFontIndex = DefaultWordCloudFontIndex;
 
         // 物理模拟
         PhysicsThread _physicsThread;

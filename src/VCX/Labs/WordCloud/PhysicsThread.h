@@ -31,9 +31,6 @@ namespace VCX::Labs::labf {
                 AddWord,            // 添加词
                 RemoveWord,         // 删除词
                 SetParams,          // 设置物理参数
-                SetExponentialDecay,   // 设置指数衰减系数
-                StartFastDecay,        // 启动快速衰减模式
-                StartShuffle,          // 启动随机打乱模式
                 Reset               // 重置模拟器
             };
             Type type;
@@ -42,7 +39,6 @@ namespace VCX::Labs::labf {
             float orientation = 0.0f;
             bool highlighted = false;
             glm::vec4 color { 1, 1, 1, 1 };
-            float exponentialDecay = 0.95f;
             WordEntity word;
             PhysicsParams params;
 
@@ -197,28 +193,6 @@ namespace VCX::Labs::labf {
             EnqueueCommand(std::move(cmd));
         }
 
-        // 设置指数衰减系数
-        void SetExponentialDecay(float decay) {
-            Command cmd;
-            cmd.type = Command::SetExponentialDecay;
-            cmd.exponentialDecay = decay;
-            EnqueueCommand(std::move(cmd));
-        }
-
-        // 启动快速衰减模式（论文 g(t) = β/(t+1)）
-        void StartFastDecay() {
-            Command cmd;
-            cmd.type = Command::StartFastDecay;
-            EnqueueCommand(std::move(cmd));
-        }
-
-        // 启动随机打乱模式
-        void StartShuffle() {
-            Command cmd;
-            cmd.type = Command::StartShuffle;
-            EnqueueCommand(std::move(cmd));
-        }
-
     private:
         void EnqueueCommand(Command&& cmd) {
             std::lock_guard<std::mutex> lock(_commandMutex);
@@ -304,18 +278,6 @@ namespace VCX::Labs::labf {
 
                 case Command::SetParams:
                     _params = cmd.params;
-                    break;
-
-                case Command::SetExponentialDecay:
-                    _params.exponentialDecay = cmd.exponentialDecay;
-                    break;
-
-                case Command::StartFastDecay:
-                    _simulator.StartFastDecay(_params);
-                    break;
-
-                case Command::StartShuffle:
-                    _simulator.StartShuffle(*_writeBuffer, _params);
                     break;
 
                 case Command::Reset:

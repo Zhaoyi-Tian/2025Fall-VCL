@@ -119,9 +119,9 @@ const MSDFGlyphInfo& MSDFAtlas::GetGlyph(uint32_t codepoint) {
         return it->second;
     }
 
-    // Try to load the glyph
+    // Try to load the glyph (但不立即更新纹理，避免频繁调用 glGenerateMipmap)
+    // 用户应使用 PreloadGlyphs 批量加载后调用 UpdateTexture
     if (LoadGlyph(codepoint)) {
-        UpdateTexture();
         return _glyphCache[codepoint];
     }
 
@@ -304,12 +304,8 @@ bool MSDFAtlas::ExpandAtlas() {
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, _currentSize, _currentSize, 0, GL_RGB, GL_FLOAT, _atlasBitmap.data());
     glBindTexture(GL_TEXTURE_2D, 0);
 
-    // Recreate packer (need to re-add all existing rectangles)
-    // For simplicity, we expand the packer's bounds
-    _packer = std::make_unique<msdf_atlas::RectanglePacker>(_currentSize, _currentSize);
-
-    // Re-pack existing glyphs (they keep their positions, we just mark areas as used)
-    // Note: This is a simplified approach. A proper implementation would track all rectangles.
+    // Expand the packer to new size (preserves existing glyph positions)
+    _packer->expand(_currentSize, _currentSize);
 
     _textureDirty = true;
     return true;

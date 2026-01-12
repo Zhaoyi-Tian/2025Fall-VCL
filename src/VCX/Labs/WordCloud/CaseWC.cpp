@@ -16,7 +16,8 @@ namespace VCX::Labs::labf {
     WordCloud::WordCloud():
         _texture({ .MinFilter = Engine::GL::FilterMode::Linear, .MagFilter = Engine::GL::FilterMode::Nearest }),
         _empty(Common::CreateCheckboardImageRGB(c_Size.first, c_Size.second)),
-        _wordCloudRenderer(std::make_unique<WordCloudRenderer>()) {
+        _wordCloudRenderer(std::make_unique<WordCloudRenderer>()),
+        _currentFontIndex(DefaultWordCloudFontIndex) {
 
         float cx = c_Size.first * 0.5f;
         float cy = c_Size.second * 0.5f;
@@ -114,6 +115,7 @@ namespace VCX::Labs::labf {
             ImGui::Text("EdWordle 参数");
             bool paramsChanged = false;
             paramsChanged |= ImGui::SliderFloat("中心力权重", &_physicsParams.alpha, 0.0f, 1.0f);
+            paramsChanged |= ImGui::SliderFloat("速度阻尼", &_physicsParams.lambda, 0.5f, 0.99f);
             paramsChanged |= ImGui::SliderFloat("弹性系数", &_physicsParams.restitution, 0.0f, 1.0f);
 
             // 物理频率调节（以 Hz 显示，内部转换为 fixedDt）
@@ -125,25 +127,46 @@ namespace VCX::Labs::labf {
 
             if (paramsChanged) {
                 _physicsThread.SetParams(_physicsParams);
+                _physicsThread.ResetSimulator();  // 参数变化时重置 t
             }
 
-            // 指数衰减系数调整
-            if (ImGui::SliderFloat("衰减系数", &_physicsParams.exponentialDecay, 0.9f, 0.99f, "%.3f")) {
-                _physicsThread.SetExponentialDecay(_physicsParams.exponentialDecay);
-            }
-
-            // 快速衰减和随机打乱按钮
-            if (ImGui::Button("快速收敛")) {
-                _physicsThread.StartFastDecay();
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("随机打乱")) {
-                _physicsThread.StartShuffle();
-            }
-            ImGui::SameLine();
             if (ImGui::Button("重置模拟")) {
                 _physicsThread.ResetSimulator();
             }
+        }
+
+        ImGui::Separator();
+
+        // === 字体设置 ===
+        ImGui::Text("词云字体");
+        const auto& fonts = GetWordCloudFonts();
+        if (!fonts.empty() && _currentFontIndex < fonts.size()) {
+            if (ImGui::BeginCombo("##font", fonts[_currentFontIndex].name.c_str())) {
+                for (std::size_t i = 0; i < fonts.size(); ++i) {
+                    if (ImGui::Selectable(fonts[i].name.c_str(), i == _currentFontIndex)) {
+                        if (i != _currentFontIndex) {
+                            _currentFontIndex = i;
+                            _wordCloudRenderer->SetFont(fonts[i].path);
+                            // 换字体时刷新所有词的三级 OBB
+                            float maxFontSize = ComputeMaxFontSize();
+                            for (auto& w : _wm.items()) {
+                                InitializeWordOBBs(w, maxFontSize);
+                            }
+                            // 如果物理线程运行中，同步 OBB 更新并重置模拟
+                            if (_enablePhysics && _physicsThread.IsRunning()) {
+                                for (size_t idx = 0; idx < _wm.items().size(); ++idx) {
+                                    _physicsThread.UpdateWordOBB(idx, _wm.items()[idx]);
+                                }
+                                _physicsThread.ResetSimulator();
+                            }
+                            _recompute = true;
+                        }
+                    }
+                }
+                ImGui::EndCombo();
+            }
+        } else {
+            ImGui::TextDisabled("未找到字体");
         }
 
         ImGui::Separator();
@@ -282,8 +305,12 @@ namespace VCX::Labs::labf {
 
     Common::CaseRenderResult WordCloud::OnRender(std::pair<std::uint32_t, std::uint32_t> const desiredSize) {
 
+        // 获取字体路径
+        const auto& fonts = GetWordCloudFonts();
+        std::string fontPath = fonts[_currentFontIndex].path;
+
         // 延迟初始化（确保 ImGui 字体已经准备好）
-        if (_wordCloudRenderer->Initialize()) {
+        if (_wordCloudRenderer->Initialize(fontPath)) {
             // 初始化成功后，计算最大字号并初始化所有词的三级 OBB
             float maxFontSize = ComputeMaxFontSize();
             for (auto& w : _wm.items()) {
@@ -397,6 +424,7 @@ namespace VCX::Labs::labf {
                     for (size_t idx : result.changedIndices) {
                         _physicsThread.UpdateWordPositionDelta(idx, result.positionDelta);
                     }
+                    _physicsThread.ResetSimulator();  // 交互时重置 t
                 }
 
                 // 处理旋转（使用增量命令，避免竞态条件）
@@ -404,6 +432,7 @@ namespace VCX::Labs::labf {
                     for (size_t idx : result.changedIndices) {
                         _physicsThread.UpdateWordOrientationDelta(idx, result.orientationDelta);
                     }
+                    _physicsThread.ResetSimulator();  // 交互时重置 t
                 }
 
                 // 处理缩放
