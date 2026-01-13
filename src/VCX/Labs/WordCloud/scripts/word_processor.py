@@ -55,37 +55,58 @@ def clean_markdown(raw_md):
 
 def process_multiple_md(file_paths, top_k=100):
     """读取多个 md 文件，合并后进行 TF-IDF 统计"""
+    # 调试信息
+    print(f"[DEBUG] 收到文件数量: {len(file_paths)}", file=sys.stderr)
+    print(f"[DEBUG] 停用词数量: {len(jieba_stopwords)}", file=sys.stderr)
+    print(f"[DEBUG] 文件列表: {file_paths}", file=sys.stderr)
+
     # 读取所有文档
+    MIN_WORD_COUNT = 20  # 最少词数阈值
     docs = []
     for path in file_paths:
         path = os.path.normpath(path)
+        print(f"[DEBUG] 读取文件: {path}", file=sys.stderr)
         with open(path, 'r', encoding='utf-8') as f:
             content = f.read()
+            print(f"[DEBUG] 原始内容长度: {len(content)}", file=sys.stderr)
             # 清洗 Markdown
             content = clean_markdown(content)
+            print(f"[DEBUG] 清洗后内容长度: {len(content)}", file=sys.stderr)
             # jieba 分词并过滤单字符和停用词
             words = [w for w in jieba.cut(content) if len(w) > 1 and w not in jieba_stopwords]
+            print(f"[DEBUG] 分词后词数: {len(words)}", file=sys.stderr)
+            if len(words) < MIN_WORD_COUNT:
+                print(f"[DEBUG] 跳过: 词数 {len(words)} < {MIN_WORD_COUNT}", file=sys.stderr)
+                continue  # 过滤掉词数不足的文档
+            if words:
+                print(f"[DEBUG] 前10个词: {words[:10]}", file=sys.stderr)
             docs.append(words)
 
+    print(f"[DEBUG] 过滤后有效文档数: {len(docs)}", file=sys.stderr)
     if not docs:
+        print("[DEBUG] 警告: 没有文档内容", file=sys.stderr)
         return []
 
     # 计算每个文档的词频 (TF)
     doc_tf = []
-    for words in docs:
+    for i, words in enumerate(docs):
         tf = Counter(words)
         total = len(words)
+        print(f"[DEBUG] 文档{i}: 唯一词数={len(tf)}, 总词数={total}", file=sys.stderr)
         # 归一化 TF
         normalized_tf = {word: count / total for word, count in tf.items()}
         doc_tf.append(normalized_tf)
 
     # 计算 IDF
     num_docs = len(docs)
+    print(f"[DEBUG] 文档总数: {num_docs}", file=sys.stderr)
     doc_count = defaultdict(int)  # 包含每个词的文档数量
     for words in docs:
         unique_words = set(words)
         for word in unique_words:
             doc_count[word] += 1
+
+    print(f"[DEBUG] IDF计算: 共有 {len(doc_count)} 个不同的词", file=sys.stderr)
 
     idf = {}
     for word, count in doc_count.items():
@@ -97,14 +118,21 @@ def process_multiple_md(file_paths, top_k=100):
         for word, tf_val in tf.items():
             word_tfidf[word] += tf_val * idf.get(word, 0)
 
+    print(f"[DEBUG] TF-IDF计算后: 共有 {len(word_tfidf)} 个词", file=sys.stderr)
+
     # 取前 top_k 个高 TF-IDF 词
     sorted_words = sorted(word_tfidf.items(), key=lambda x: x[1], reverse=True)
+
+    print(f"[DEBUG] 排序后词数: {len(sorted_words)}", file=sys.stderr)
+    if sorted_words:
+        print(f"[DEBUG] 前5个词及权重: {sorted_words[:5]}", file=sys.stderr)
 
     result = [
         {"text": word, "weight": round(weight, 6)}
         for word, weight in sorted_words[:top_k]
     ]
 
+    print(f"[DEBUG] 最终结果词数: {len(result)}", file=sys.stderr)
     return result
 
 if __name__ == "__main__":

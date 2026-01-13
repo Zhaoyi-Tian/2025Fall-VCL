@@ -8,16 +8,21 @@ namespace VCX::Labs::Common {
     static std::wstring StringToWString(const std::string& str) {
         if (str.empty()) return L"";
         int size = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, nullptr, 0);
-        std::wstring wstr(size - 1, 0);  // 减1去掉末尾的null
+        if (size <= 0) return L"";
+        // 分配包含终止符的空间给 API 写入，然后丢弃末尾的 null
+        std::wstring wstr(static_cast<size_t>(size), L'\0');
         MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, &wstr[0], size);
+        wstr.resize(static_cast<size_t>(size) - 1);
         return wstr;
     }
 
     static std::string WStringToString(const std::wstring& wstr) {
         if (wstr.empty()) return "";
         int size = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, nullptr, 0, nullptr, nullptr);
-        std::string str(size - 1, 0);  // 减1去掉末尾的null
+        if (size <= 0) return std::string();
+        std::string str(static_cast<size_t>(size), '\0');
         WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, &str[0], size, nullptr, nullptr);
+        str.resize(static_cast<size_t>(size) - 1);
         return str;
     }
 
@@ -38,12 +43,16 @@ namespace VCX::Labs::Common {
             std::wstring name = StringToWString(extensions[i].first);
             std::wstring spec = StringToWString(extensions[i].second);
 
-            // 复制名称
-            wcscpy_s(filter + filterPos, MAX_PATH, name.c_str());
+            // 复制名称，传入剩余缓冲区长度以避免溢出
+            size_t remaining = (sizeof(filter) / sizeof(filter[0])) - filterPos;
+            if (remaining == 0) break;
+            wcscpy_s(filter + filterPos, remaining, name.c_str());
             filterPos += name.size() + 1;
 
             // 复制扩展名
-            wcscpy_s(filter + filterPos, MAX_PATH, spec.c_str());
+            remaining = (sizeof(filter) / sizeof(filter[0])) - filterPos;
+            if (remaining == 0) break;
+            wcscpy_s(filter + filterPos, remaining, spec.c_str());
             filterPos += spec.size() + 1;
         }
 
@@ -54,9 +63,12 @@ namespace VCX::Labs::Common {
         ofn.nMaxFile = MAX_PATH;
         ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
 
+        fprintf(stderr, "FileDialog::SelectFile - before GetOpenFileNameW\n");
         if (GetOpenFileNameW(&ofn)) {
+            fprintf(stderr, "FileDialog::SelectFile - after GetOpenFileNameW (ok)\n");
             return WStringToString(filePath);
         }
+        fprintf(stderr, "FileDialog::SelectFile - after GetOpenFileNameW (cancel/fail)\n");
         return std::nullopt;
     }
 
@@ -78,10 +90,14 @@ namespace VCX::Labs::Common {
             std::wstring name = StringToWString(extensions[i].first);
             std::wstring spec = StringToWString(extensions[i].second);
 
-            wcscpy_s(filter + filterPos, MAX_PATH, name.c_str());
+            size_t remaining = (sizeof(filter) / sizeof(filter[0])) - filterPos;
+            if (remaining == 0) break;
+            wcscpy_s(filter + filterPos, remaining, name.c_str());
             filterPos += name.size() + 1;
 
-            wcscpy_s(filter + filterPos, MAX_PATH, spec.c_str());
+            remaining = (sizeof(filter) / sizeof(filter[0])) - filterPos;
+            if (remaining == 0) break;
+            wcscpy_s(filter + filterPos, remaining, spec.c_str());
             filterPos += spec.size() + 1;
         }
 
@@ -93,10 +109,13 @@ namespace VCX::Labs::Common {
         ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR
                   | OFN_ALLOWMULTISELECT | OFN_EXPLORER;
 
+        fprintf(stderr, "FileDialog::SelectFiles - before GetOpenFileNameW\n");
         if (GetOpenFileNameW(&ofn)) {
+            fprintf(stderr, "FileDialog::SelectFiles - after GetOpenFileNameW (ok)\n");
             std::vector<std::string> results;
             const wchar_t* p = filePath.data();
             std::wstring directory = p;
+            fprintf(stderr, "FileDialog::SelectFiles - directory wide length=%zu\n", directory.size());
             p += directory.size() + 1;
 
             if (*p == L'\0') {
@@ -111,8 +130,10 @@ namespace VCX::Labs::Common {
                     p += fileName.size() + 1;
                 }
             }
+            fprintf(stderr, "FileDialog::SelectFiles - parsed %zu results\n", results.size());
             return results;
         }
+        fprintf(stderr, "FileDialog::SelectFiles - after GetOpenFileNameW (cancel/fail)\n");
         return std::nullopt;
     }
 }

@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <iostream>
 #include <windows.h>
+#include <codecvt>
 #include <nlohmann/json.hpp>
 #include "Labs/WordCloud/PythonProcessor.h"
 
@@ -29,32 +30,25 @@ namespace VCX::Labs::labf {
 
     bool PythonProcessor::IsPythonAvailable() {
         std::filesystem::path pythonPath = GetPythonPath();
-        // 用 C++ 标准库检查文件是否存在，避免 dir > nul 生成 nul 文件
         return std::filesystem::exists(pythonPath) && std::filesystem::is_regular_file(pythonPath);
     }
 
     std::vector<WordResult> PythonProcessor::ProcessMarkdown(std::string const& filePath) {
         std::vector<WordResult> results;
 
-        // 使用 filesystem 处理路径，确保中文兼容性
         std::filesystem::path pythonPath = GetPythonPath();
         std::filesystem::path scriptPath = GetScriptPath();
         std::filesystem::path targetPath = std::filesystem::u8path(filePath);
 
-        // 构造命令：外层包裹一对额外的引号防止 cmd.exe 剥离
-        // 形式如： ""python.exe" "script.py" "data.md""
         std::wstring wCommand = L"\"\"" + pythonPath.wstring() + L"\" \"" +
                                 scriptPath.wstring() + L"\" \"" +
                                 targetPath.wstring() + L"\"";
 
         FILE* pipe = _wpopen(wCommand.c_str(), L"r");
         if (!pipe) {
-            DWORD error = GetLastError();
-            std::cerr << "Failed to run Python script, error code: " << error << std::endl;
             return results;
         }
 
-        // 读取输出
         std::string output;
         char buffer[4096];
         while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
@@ -67,11 +61,11 @@ namespace VCX::Labs::labf {
             for (auto const& item : json) {
                 WordResult result;
                 result.text = item["text"].get<std::string>();
-                result.weight = static_cast<float>(item["weight"].get<int>());
+                result.weight = item["weight"].get<float>();
                 results.push_back(result);
             }
         } catch (nlohmann::json::parse_error const& e) {
-            std::cerr << "JSON parse error: " << e.what() << std::endl;
+            (void)e;
         }
 
         return results;
@@ -82,10 +76,17 @@ namespace VCX::Labs::labf {
         int topK
     ) {
         std::vector<WordResult> results;
-        if (filePaths.empty()) return results;
+        if (filePaths.empty()) {
+            return results;
+        }
 
         std::filesystem::path pythonPath = GetPythonPath();
         std::filesystem::path scriptPath = GetScriptPath();
+
+        // 检查文件存在性
+        if (!std::filesystem::exists(pythonPath) || !std::filesystem::exists(scriptPath)) {
+            return results;
+        }
 
         // 构造命令：python script.py --top_k N file1 file2 ...
         std::wstring wCommand = L"\"\"" + pythonPath.wstring() + L"\" \"" +
@@ -100,8 +101,6 @@ namespace VCX::Labs::labf {
 
         FILE* pipe = _wpopen(wCommand.c_str(), L"r");
         if (!pipe) {
-            DWORD error = GetLastError();
-            std::cerr << "Failed to run Python script, error code: " << error << std::endl;
             return results;
         }
 
@@ -112,16 +111,20 @@ namespace VCX::Labs::labf {
         }
         _pclose(pipe);
 
+        if (output.empty()) {
+            return results;
+        }
+
         try {
             auto json = nlohmann::json::parse(output);
             for (auto const& item : json) {
                 WordResult result;
                 result.text = item["text"].get<std::string>();
-                result.weight = static_cast<float>(item["weight"].get<int>());
+                result.weight = item["weight"].get<float>();
                 results.push_back(result);
             }
         } catch (nlohmann::json::parse_error const& e) {
-            std::cerr << "JSON parse error: " << e.what() << std::endl;
+            (void)e;
         }
 
         return results;

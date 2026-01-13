@@ -1,7 +1,9 @@
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <cstdio>
 #include <chrono>
+#include <iostream>
 
 #include "Labs/WordCloud/CaseWC.h"
 #include "Labs/Common/ImGuiHelper.h"
@@ -19,43 +21,7 @@ namespace VCX::Labs::labf {
         _wordCloudRenderer(std::make_unique<WordCloudRenderer>()),
         _currentFontIndex(DefaultWordCloudFontIndex) {
 
-        float cx = c_Size.first * 0.5f;
-        float cy = c_Size.second * 0.5f;
-
-        auto& w1 = _wm.add("Hello", 48.0f);
-        w1.color = { 0.2f, 0.6f, 1.0f, 1.0f };
-        w1.position = { cx - 100, cy - 50 };
-        w1.wordVector = { 0.9f, 0.8f, 0.1f, 0.1f, 0.0f, 0.0f, 0.0f, 0.0f };  // 问候语
-
-        auto& w2 = _wm.add("世界", 42.0f);
-        w2.color = { 1.0f, 0.4f, 0.2f, 1.0f };
-        w2.position = { cx + 80, cy - 30 };
-        w2.wordVector = { 0.85f, 0.75f, 0.15f, 0.2f, 0.0f, 0.0f, 0.0f, 0.0f };  // 问候语（与Hello相似）
-
-        auto& w3 = _wm.add("WordCloud", 36.0f);
-        w3.color = { 0.3f, 0.8f, 0.4f, 1.0f };
-        w3.position = { cx, cy + 60 };
-        w3.wordVector = { 0.1f, 0.1f, 0.8f, 0.7f, 0.6f, 0.5f, 0.0f, 0.0f };  // 图形技术
-
-        auto& w4 = _wm.add("物理模拟", 32.0f);
-        w4.color = { 0.9f, 0.7f, 0.1f, 1.0f };
-        w4.position = { cx - 120, cy + 100 };
-        w4.wordVector = { 0.0f, 0.0f, 0.2f, 0.3f, 0.1f, 0.1f, 0.9f, 0.85f };  // 物理（独立）
-
-        auto& w5 = _wm.add("OpenGL", 28.0f);
-        w5.color = { 0.6f, 0.2f, 0.8f, 1.0f };
-        w5.position = { cx + 100, cy + 80 };
-        w5.wordVector = { 0.05f, 0.1f, 0.75f, 0.8f, 0.7f, 0.6f, 0.0f, 0.0f };  // 图形技术（与WordCloud相似）
-
-        auto& w6 = _wm.add("MSDF", 24.0f);
-        w6.color = { 0.1f, 0.5f, 0.7f, 1.0f };
-        w6.position = { cx - 80, cy - 120 };
-        w6.wordVector = { 0.1f, 0.05f, 0.7f, 0.75f, 0.65f, 0.55f, 0.0f, 0.0f };  // 图形技术
-
-        // 预计算相似度矩阵
-        _wm.recomputeSimilarityMatrix();
-
-        // OBB 会在 OnRender 中使用 MeasureTextDetailed 更新为真实尺寸
+        // 初始为空词云，等待用户选择文件生成
     }
 
     void WordCloud::OnSetupPropsUI() {
@@ -112,26 +78,36 @@ namespace VCX::Labs::labf {
             }
         }
         if (_enablePhysics) {
-            ImGui::Text("EdWordle 参数");
-            bool paramsChanged = false;
-            paramsChanged |= ImGui::SliderFloat("中心力权重", &_physicsParams.alpha, 0.0f, 1.0f);
-            paramsChanged |= ImGui::SliderFloat("速度阻尼", &_physicsParams.lambda, 0.5f, 0.99f);
-            paramsChanged |= ImGui::SliderFloat("弹性系数", &_physicsParams.restitution, 0.0f, 1.0f);
-
-            // 物理频率调节（以 Hz 显示，内部转换为 fixedDt）
-            float physicsHz = 1.0f / _physicsParams.fixedDt;
-            if (ImGui::SliderFloat("物理频率", &physicsHz, 30.0f, 240.0f, "%.0f Hz")) {
-                _physicsParams.fixedDt = 1.0f / physicsHz;
-                paramsChanged = true;
+            // 设置按钮显示参数窗口
+            if (ImGui::Button("设置##physics")) {
+                _showPhysicsSettingsWindow = !_showPhysicsSettingsWindow;
             }
+            ImGui::SameLine();
+            ImGui::Text("物理参数");
 
-            if (paramsChanged) {
-                _physicsThread.SetParams(_physicsParams);
-                _physicsThread.ResetSimulator();  // 参数变化时重置 t
-            }
+            // 物理参数设置窗口
+            if (_showPhysicsSettingsWindow) {
+                ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+                ImGui::SetNextWindowSize(ImVec2(350, 280), ImGuiCond_Always);
+                ImGui::Begin("物理参数设置", &_showPhysicsSettingsWindow);
+                bool paramsChanged = false;
+                paramsChanged |= ImGui::SliderFloat("中心力权重", &_physicsParams.alpha, 0.0f, 1.0f);
+                paramsChanged |= ImGui::SliderFloat("速度阻尼", &_physicsParams.lambda, 0.5f, 0.99f);
+                paramsChanged |= ImGui::SliderFloat("弹性系数", &_physicsParams.restitution, 0.0f, 1.0f);
 
-            if (ImGui::Button("重置模拟")) {
-                _physicsThread.ResetSimulator();
+                // 物理频率调节（以 Hz 显示，内部转换为 fixedDt）
+                float physicsHz = 1.0f / _physicsParams.fixedDt;
+                if (ImGui::SliderFloat("物理频率", &physicsHz, 30.0f, 240.0f, "%.0f Hz")) {
+                    _physicsParams.fixedDt = 1.0f / physicsHz;
+                    paramsChanged = true;
+                }
+
+                if (paramsChanged) {
+                    _physicsThread.SetParams(_physicsParams);
+                    _physicsThread.ResetSimulator();  // 参数变化时重置 t
+                }
+
+                ImGui::End();
             }
         }
 
@@ -179,23 +155,22 @@ namespace VCX::Labs::labf {
         // === 从 Markdown 文件生成词云 ===
         ImGui::Text("从 Markdown 文件生成词云");
 
-        // 显示已选择的文件
+        // 显示已选择的文件（使用自动换行）
         if (_mdFilePaths.empty()) {
             ImGui::TextDisabled("未选择文件");
         } else {
             ImGui::Text("已选择 %zu 个文件", _mdFilePaths.size());
-            if (ImGui::TreeNode("文件列表")) {
-                for (auto const& path : _mdFilePaths) {
-                    ImGui::BulletText("%s", path.c_str());
-                }
-                ImGui::TreePop();
+            ImGui::PushTextWrapPos(ImGui::GetCursorPos().x + ImGui::GetContentRegionAvail().x - 20);
+            for (size_t i = 0; i < _mdFilePaths.size(); ++i) {
+                ImGui::BulletText("%s", _mdFilePaths[i].c_str());
             }
+            ImGui::PopTextWrapPos();
         }
 
         // 词数滑条
-        ImGui::SliderInt("返回词数", &_topK, 10, 500);
+        ImGui::SliderInt("返回词数", &_topK, 10, 200);
 
-        ImVec2 buttonSize = ImVec2(120, 24);
+        ImVec2 buttonSize = ImVec2(120, 30);
         if (ImGui::Button("选择文件", buttonSize)) {
             auto result = Common::FileDialog::SelectFiles(
                 "选择 Markdown 文件",
@@ -212,8 +187,11 @@ namespace VCX::Labs::labf {
             if (!_mdFilePaths.empty()) {
                 _pythonStatusMessage = "处理中...";
                 _pythonTask.Reset();
-                _pythonTask.Emplace([this]() {
-                    return PythonProcessor::ProcessMarkdownBatch(_mdFilePaths, _topK);
+                // 按值捕获，避免异步任务访问已修改的引用
+                auto filePaths = _mdFilePaths;
+                int topK = _topK;
+                _pythonTask.Emplace([filePaths, topK]() {
+                    return PythonProcessor::ProcessMarkdownBatch(filePaths, topK);
                 });
                 _pythonTaskCompleted = false;
             } else {
@@ -227,6 +205,21 @@ namespace VCX::Labs::labf {
             ImGui::Text("%s", _pythonStatusMessage.c_str());
         }
 
+        ImGui::Separator();
+
+        // === 清空词云 ===
+        ImVec2 clearButtonSize = ImVec2(120, 30);
+        if (ImGui::Button("清空词云", clearButtonSize)) {
+            // 停止物理线程
+            _physicsThread.Stop();
+            _physicsInitialized = false;
+            // 清空词云
+            _wm.clear();
+            _pythonResult.clear();
+            _pythonStatusMessage = "已清空词云";
+            _recompute = true;
+        }
+
         // 处理完成结果
         if (!_pythonTaskCompleted && _pythonTask.HasValue()) {
             auto results = _pythonTask.Value();
@@ -235,14 +228,32 @@ namespace VCX::Labs::labf {
             if (!results.empty()) {
                 _pythonStatusMessage = fmt::format("成功解析 {} 个词", results.size());
 
-                // 将结果转换为 WordEntity 并添加到词云
-                float maxWeight = 0;
+                // 计算权重的最小值和最大值（用于对数映射）
+                float minWeight = results[0].weight;
+                float maxWeight = results[0].weight;
                 for (auto const& r : results) {
+                    minWeight = std::min(minWeight, r.weight);
                     maxWeight = std::max(maxWeight, r.weight);
                 }
 
-                for (auto const& r : results) {
-                    float fontSize = 12.0f + (r.weight / maxWeight) * 48.0f;
+                // 对数平滑映射参数
+                constexpr float SizeMin = 30.0f;  // 最小字号
+                constexpr float SizeMax = 75.0f;  // 最大字号
+                constexpr float LogOffset = 1.0f; // log(v + 1) 中的 +1 偏移
+
+                // 预计算分母，避免重复计算
+                float logMaxPlus1 = std::log(maxWeight + LogOffset);
+                float logMinPlus1 = std::log(minWeight + LogOffset);
+                float logDenom = logMaxPlus1 - logMinPlus1;
+
+                for (size_t i = 0; i < results.size(); ++i) {
+                    auto const& r = results[i];
+                    // 对数平滑映射：Size = SizeMin + (SizeMax - SizeMin) * (log(v+1) - log(v_min+1)) / (log(v_max+1) - log(v_min+1))
+                    float normalized = (logDenom > 0.0f)
+                        ? (std::log(r.weight + LogOffset) - logMinPlus1) / logDenom
+                        : 0.5f;  // 避免除零
+                    float fontSize = SizeMin + (SizeMax - SizeMin) * normalized;
+
                     auto& w = _wm.add(r.text, fontSize);
                     w.position = glm::vec2(c_Size.first * 0.5f, c_Size.second * 0.5f);
                     InitializeWordOBBs(w, ComputeMaxFontSize());
@@ -257,132 +268,6 @@ namespace VCX::Labs::labf {
             }
             _pythonTask.Reset();
             _recompute = true;
-        }
-
-        ImGui::Separator();
-
-        // === 添加词 ===
-        ImGui::Text("添加词");
-        ImGui::InputText("文本##new", _newWordText, sizeof(_newWordText));
-        ImGui::ColorEdit4("颜色##new", (float*)&_newWordColor, ImGuiColorEditFlags_AlphaBar);
-        ImGui::SliderFloat("字号##new", &_newWordFontSize, 8.0f, 100.0f);
-
-        if (ImGui::Button("+ 添加") && strlen(_newWordText) > 0) {
-            auto& w = _wm.add(_newWordText, _newWordFontSize);
-            w.color = glm::vec4(_newWordColor.x, _newWordColor.y, _newWordColor.z, _newWordColor.w);
-            w.position = glm::vec2(c_Size.first * 0.5f, c_Size.second * 0.5f);
-
-            // 使用三级 OBB 初始化
-            float maxFontSize = ComputeMaxFontSize();
-            InitializeWordOBBs(w, maxFontSize);
-
-            // 同步到物理线程
-            if (_enablePhysics && _physicsThread.IsRunning()) {
-                _physicsThread.AddWord(w);
-            }
-
-            _newWordText[0] = '\0';  // 清空输入
-            _recompute = true;
-        }
-
-        ImGui::Separator();
-
-        // === 选中词属性 ===
-        // 获取当前词数据来源
-        std::vector<WordEntity> const* wordsPtr = nullptr;
-        if (_enablePhysics && _physicsThread.IsRunning()) {
-            wordsPtr = &_physicsThread.GetReadBuffer();
-        } else {
-            wordsPtr = &_wm.items();
-        }
-
-        if (!_gizmoState.selectedIndices.empty() && wordsPtr != nullptr) {
-            ImGui::Text("选中词属性 (%zu个)", _gizmoState.selectedIndices.size());
-
-            size_t primaryIdx = _gizmoState.selectedIndices[0];
-            if (primaryIdx < wordsPtr->size()) {
-                WordEntity const& w = (*wordsPtr)[primaryIdx];
-
-                // 文本编辑（仅单选时）- 注意：文本修改需要重建，暂时禁用物理模式下的文本编辑
-                if (_gizmoState.selectedIndices.size() == 1 && !_enablePhysics) {
-                    static char editBuf[256];
-                    strncpy(editBuf, w.text.c_str(), sizeof(editBuf) - 1);
-                    editBuf[sizeof(editBuf) - 1] = '\0';
-                    if (ImGui::InputText("文本##edit", editBuf, sizeof(editBuf))) {
-                        auto& mutableW = _wm.items()[primaryIdx];
-                        mutableW.text = editBuf;
-                        // 使用三级 OBB 更新
-                        float maxFontSize = ComputeMaxFontSize();
-                        InitializeWordOBBs(mutableW, maxFontSize);
-                        _recompute = true;
-                    }
-                }
-
-                // 颜色编辑（应用于所有选中）- 颜色不影响物理，直接修改 _wm
-                ImVec4 col(w.color.r, w.color.g, w.color.b, w.color.a);
-                if (ImGui::ColorEdit4("颜色##edit", (float*)&col, ImGuiColorEditFlags_AlphaBar)) {
-                    glm::vec4 newColor(col.x, col.y, col.z, col.w);
-                    for (size_t idx : _gizmoState.selectedIndices) {
-                        if (idx < _wm.items().size()) {
-                            _wm.items()[idx].color = newColor;
-                        }
-                        // 同步颜色到物理线程
-                        if (_enablePhysics && _physicsThread.IsRunning()) {
-                            _physicsThread.UpdateWordColor(idx, newColor);
-                        }
-                    }
-                    _recompute = true;
-                }
-
-                // 字号编辑（应用于所有选中）
-                float fontSize = w.fontSize;
-                if (ImGui::SliderFloat("字号##edit", &fontSize, 8.0f, 100.0f)) {
-                    float maxFontSize = std::max(ComputeMaxFontSize(), fontSize);
-                    for (size_t idx : _gizmoState.selectedIndices) {
-                        if (idx < _wm.items().size()) {
-                            auto& mutableW = _wm.items()[idx];
-                            mutableW.fontSize = fontSize;
-                            // 使用三级 OBB 更新
-                            InitializeWordOBBs(mutableW, maxFontSize);
-                            // 发送 OBB 更新命令
-                            if (_enablePhysics && _physicsThread.IsRunning()) {
-                                _physicsThread.UpdateWordOBB(idx, mutableW);
-                            }
-                        }
-                    }
-                    _recompute = true;
-                }
-
-                // 角度编辑（仅单选时）
-                if (_gizmoState.selectedIndices.size() == 1) {
-                    float orientation = w.orientation;
-                    if (ImGui::SliderFloat("角度##edit", &orientation, -180.0f, 180.0f, "%.1f")) {
-                        _wm.items()[primaryIdx].orientation = orientation;
-                        if (_enablePhysics && _physicsThread.IsRunning()) {
-                            _physicsThread.UpdateWordOrientation(primaryIdx, orientation);
-                        }
-                        _recompute = true;
-                    }
-                }
-
-                // 删除按钮
-                if (ImGui::Button("删除选中")) {
-                    // 已经有索引了，直接用
-                    std::vector<size_t> indicesToRemove = _gizmoState.selectedIndices;
-                    // 从后往前删除
-                    std::sort(indicesToRemove.rbegin(), indicesToRemove.rend());
-                    for (size_t idx : indicesToRemove) {
-                        _wm.remove(idx);
-                        // 同步到物理线程
-                        if (_enablePhysics && _physicsThread.IsRunning()) {
-                            _physicsThread.RemoveWord(idx);
-                        }
-                    }
-                    // 清空选中
-                    _gizmoState.selectedIndices.clear();
-                    _recompute = true;
-                }
-            }
         }
 
         ImGui::Spacing();

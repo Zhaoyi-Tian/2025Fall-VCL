@@ -52,11 +52,6 @@ namespace VCX::Labs::labf {
         // Gizmo 交互状态
         labf::GizmoState _gizmoState;
 
-        // 添加词的 UI 状态
-        char _newWordText[256] = "";
-        ImVec4 _newWordColor = ImVec4(0.2f, 0.6f, 1.0f, 1.0f);
-        float _newWordFontSize = 28.0f;
-
         // 全局角度锁定
         float _lockAngle = 0.0f;
 
@@ -68,6 +63,7 @@ namespace VCX::Labs::labf {
         PhysicsParams _physicsParams;
         bool _enablePhysics = true;
         bool _physicsInitialized = false;
+        bool _showPhysicsSettingsWindow = false; // 物理设置窗口可见性
 
         // Markdown 文件处理
         std::vector<std::string> _mdFilePaths;
