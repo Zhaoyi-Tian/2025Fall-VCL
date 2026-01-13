@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vector>
+#include <map>
 #include <cmath>
 #include <algorithm>
 #include <random>
@@ -23,10 +24,12 @@ namespace VCX::Labs::labf {
         float lambda = 0.8f;             // 速度阻尼系数 (公式 4)
 
         // 碰撞参数
-        float restitution = 0.3f;        // 碰撞恢复系数
+        float restitution = 0.0f;        // 碰撞恢复系数
 
         // 时间步参数
         float fixedDt = 1.0f / 120.0f;   // 固定时间步（秒）
+        // 停止条件
+        int maxIterations = 80;          // 最大迭代次数（帧数）
     };
 
     // ============================================================
@@ -357,48 +360,112 @@ namespace VCX::Labs::labf {
         // 重置帧计数器（当词云重新布局时调用）
         void Reset() {
             _frameCount = 0;
+            _arbiters.clear();
         }
 
         // 每帧调用，使用指定的时间步
         void Update(std::vector<WordEntity>& words, float dt, PhysicsParams& params) {
             if (dt <= 0 || words.empty()) return;
+            // 超过最大迭代次数停止模拟，节省性能
+            if (_frameCount >= params.maxIterations) return;
             Step(words, dt, params);
         }
 
     private:
-        int _frameCount = 0;      // 物理步计数器，用于力衰减 g(t) = β/(t+1)
+        int _frameCount = 0;      // 物理步计数器
 
-        // 计算当前衰减因子：g(t) = β/(t+1)
-        float ComputeDecayFactor(PhysicsParams const& params) {
-            return params.beta / (float)(_frameCount + 1);
+        // Box2D-Lite 风格的数学辅助函数
+        static inline float Dot(glm::vec2 const& a, glm::vec2 const& b) { return glm::dot(a, b); }
+        static inline float Cross(glm::vec2 const& a, glm::vec2 const& b) { return a.x * b.y - a.y * b.x; }
+        static inline glm::vec2 Cross(glm::vec2 const& a, float s) { return { s * a.y, -s * a.x }; }
+
+        // 内部 Arbiter 结构，模拟 box2d-lite 的接触约束
+        struct Arbiter {
+            WordEntity* body1;
+            WordEntity* body2;
+            glm::vec2   normal;
+            float       separation; // 穿透为负值
+            
+            float       massNormal;
+            float       massTangent;
+            float       bias;
+            
+            float       Pn = 0.0f;  // 累积法向脉冲
+            float       Pt = 0.0f;  // 累积切向脉冲
+            
+            float       friction;
+            float       restitution;
+        };
+
+        struct ArbiterKey {
+            WordEntity* body1;
+            WordEntity* body2;
+
+            ArbiterKey(WordEntity* b1, WordEntity* b2) {
+                if (b1 < b2) {
+                    body1 = b1;
+                    body2 = b2;
+                } else {
+                    body1 = b2;
+                    body2 = b1;
+                }
+            }
+
+            bool operator<(const ArbiterKey& other) const {
+                if (body1 < other.body1) return true;
+                if (body1 == other.body1 && body2 < other.body2) return true;
+                return false;
+            }
+        };
+
+        std::map<ArbiterKey, Arbiter> _arbiters; // 持久化 Arbiter 存储 (Warm Starting)
+
+        float GetInvMass(const WordEntity& w) {
+            if (w.isHighlighted) return 0.0f; // 高亮时视为质量无限大（固定）
+            if (w.mass == 0.0f) return 0.0f;
+            return 1.0f / w.mass;
         }
 
         // 单步物理模拟（固定 dt）
+        // 流程调整为符合 Box2D-Lite: Forces -> Velocity -> Solve -> Position
         void Step(std::vector<WordEntity>& words, float dt, PhysicsParams& params) {
             if (dt <= 0 || words.empty()) return;
 
-            // 1. 施加 EdWordle 力
+            // 1. 施加 EdWordle 力 (Force Integration 的一部分)
             ApplyEdWordleForces(words, params);
 
-            // 2. 积分更新位置和速度
+            // 2. 积分更新速度 (Integrate Velocities from Forces)
+            // v2 = v1 + (F/m) * dt
             for (auto& w : words) {
                 if (!w.isHighlighted) {
-                    // 速度积分
-                    w.velocity += w.forceAccumulator / w.mass * dt;
-
-                    // 应用速度阻尼（论文公式 4）
+                    float invMass = GetInvMass(w);
+                    if (invMass > 0.0f) {
+                        w.velocity += w.forceAccumulator * invMass * dt;
+                    }
+                    // 保留原有的线性阻尼逻辑
                     w.velocity *= params.lambda;
+                }
+            }
 
-                    // 位置积分
+            // 3. 碰撞检测与求解 (Constraint Solver)
+            // 这一步会修改速度以满足非穿透约束
+            SolveCollisions(words, dt, params);
+
+            // 4. 积分更新位置 (Integrate Positions)
+            // x2 = x1 + v2 * dt
+            for (auto& w : words) {
+                if (!w.isHighlighted) {
                     w.position += w.velocity * dt;
                 }
             }
 
-            // 3. 碰撞检测与响应
-            DetectAndResolveCollisions(words, params);
-
-            // 4. 增加帧计数器（用于力衰减）
+            // 5. 增加帧计数器
             _frameCount++;
+        }
+
+        // 计算当前衰减因子：g(t) = β/(t+1)
+        float ComputeDecayFactor(PhysicsParams const& params) {
+            return params.beta / (float)(_frameCount + 1);
         }
 
         // 计算词 i 的邻居列表
@@ -470,77 +537,155 @@ namespace VCX::Labs::labf {
                 // 3. 合力 (公式 3): F_i(t) = F^neigh_i(t) + α · F^cent_i(t)
                 glm::vec2 F_total = F_neigh + params.alpha * F_cent;
 
-                // 直接施加力（无衰减）
-                w.applyForce(F_total);
+                // 应用衰减 g(t) = β/(t+1)
+                float decay = ComputeDecayFactor(params);
+                w.applyForce(F_total * decay);
             }
         }
 
-        // 碰撞检测与响应
-        void DetectAndResolveCollisions(std::vector<WordEntity>& words, PhysicsParams const& params) {
+        // 使用 Box2D-Lite 逻辑 (Arbiter.cpp) 解决碰撞
+        void SolveCollisions(std::vector<WordEntity>& words, float dt, PhysicsParams& params) {
+            std::map<ArbiterKey, Arbiter> newArbiters;
             size_t n = words.size();
+            float friction = 0.2f; // 给定一个默认摩擦系数
 
+            // --- Broadphase & Narrowphase (生成 Arbiters) ---
             for (size_t i = 0; i < n; ++i) {
                 for (size_t j = i + 1; j < n; ++j) {
                     WordEntity& a = words[i];
                     WordEntity& b = words[j];
 
-                    // 判断是否为"有效固定"（isHighlighted 时不移动）
-                    bool aEffectivelyFixed = a.isHighlighted;
-                    bool bEffectivelyFixed = b.isHighlighted;
+                    float invMassA = GetInvMass(a);
+                    float invMassB = GetInvMass(b);
 
-                    // 如果两个都固定，跳过
-                    if (aEffectivelyFixed && bEffectivelyFixed) continue;
+                    // 如果两个都是静态物体，则忽略
+                    if (invMassA == 0.0f && invMassB == 0.0f) continue;
 
-                    // 使用两级盒子检测碰撞
-                    if (!CheckTwoLevelOBBCollision(a, b)) continue;
+                    // 使用两级碰撞检测获取详细碰撞对
+                    CollisionInfo info = CheckTwoLevelOBBCollisionDetailed(a, b);
+                    if (!info.hasCollision) continue;
 
-                    // 使用详细碰撞检测获取所有碰撞对
-                    auto collisionInfo = CheckTwoLevelOBBCollisionDetailed(a, b);
-                    if (!collisionInfo.hasCollision) continue;
-
-                    // 计算质量倒数
-                    float invMassA = aEffectivelyFixed ? 0.0f : 1.0f / a.mass;
-                    float invMassB = bEffectivelyFixed ? 0.0f : 1.0f / b.mass;
-                    float invMassSum = invMassA + invMassB;
-                    if (invMassSum <= 0) continue;
-
-                    // 找穿透最深的 OBB 对
+                    // **重要修改**：只取穿透最深的一个接触点作为代表
+                    // 这简化了流形管理，并且与 Box2D-Lite 每次 Update 只处理特定 contacts 类似
+                    // 对于 Warm Starting，我们使用 (WordA, WordB) 作为 Key，这样可以稳定地传递冲量
+                    
                     glm::vec2 bestNormal(0.0f);
-                    float maxDepth = 0.0f;
+                    float maxDepth = -FLT_MAX;
+                    bool found = false;
 
-                    for (auto const& pair : collisionInfo.pairs) {
+                    for (auto const& pair : info.pairs) {
                         glm::vec2 normal;
                         float depth;
                         if (ComputeOBBPenetration(pair.obbA, pair.obbB, normal, depth)) {
                             if (depth > maxDepth) {
                                 maxDepth = depth;
                                 bestNormal = normal;
+                                found = true;
                             }
                         }
                     }
 
-                    if (maxDepth <= 0) continue;
+                    if (found) {
+                        Arbiter arb;
+                        arb.body1 = &a;
+                        arb.body2 = &b;
+                        arb.normal = bestNormal;
+                        arb.separation = -maxDepth; 
+                        arb.friction = friction;
+                        arb.restitution = params.restitution;
 
-                    // 1. 位置修正（分离穿透，使用 0.8 比例避免抖动）
-                    float correctionRatio = 0.8f;
-                    glm::vec2 correction = bestNormal * (maxDepth * correctionRatio / invMassSum);
-                    if (!aEffectivelyFixed) a.position -= correction * invMassA;
-                    if (!bEffectivelyFixed) b.position += correction * invMassB;
+                        // Warm Starting: 检查是否存在旧的 Arbiter
+                        ArbiterKey key(&a, &b);
+                        auto iter = _arbiters.find(key);
+                        if (iter != _arbiters.end()) {
+                            arb.Pn = iter->second.Pn;
+                            arb.Pt = iter->second.Pt;
+                        }
 
-                    // 2. 速度修正（基于脉冲）
-                    glm::vec2 relVel = b.velocity - a.velocity;
-                    float velAlongNormal = glm::dot(relVel, bestNormal);
+                        newArbiters.insert({key, arb});
+                    }
+                }
+            }
 
-                    // 只在物体靠近时处理（velAlongNormal > 0 表示分离，跳过）
-                    if (velAlongNormal > 0) continue;
+            // 更新持久化存储 (移除不再碰撞的对，添加/更新碰撞对)
+            _arbiters = newArbiters;
 
-                    // 计算脉冲大小
-                    float impulseMag = -(1.0f + params.restitution) * velAlongNormal / invMassSum;
+            // --- PreStep (计算质量和 Bias) & Warm Starting ---
+            // 调整参数以适应像素坐标系：
+            // 1. allowedPenetration: 从 0.01 增加到 2.0，允许轻微重叠以减少抖动
+            // 2. biasFactor: 从 0.2 降低到 0.1，使位置修正更柔和
+            float k_allowedPenetration = 1.0f;
+            float k_biasFactor = 0.1f; 
+            float inv_dt = dt > 0.0f ? 1.0f / dt : 0.0f;
 
-                    // 应用脉冲
-                    glm::vec2 impulse = impulseMag * bestNormal;
-                    if (!aEffectivelyFixed) a.velocity -= impulse * invMassA;
-                    if (!bEffectivelyFixed) b.velocity += impulse * invMassB;
+            for (auto& [key, arb] : _arbiters) {
+                WordEntity* b1 = arb.body1;
+                WordEntity* b2 = arb.body2;
+                float invMass1 = GetInvMass(*b1);
+                float invMass2 = GetInvMass(*b2);
+
+                // 计算有效质量
+                float kNormal = invMass1 + invMass2;
+                arb.massNormal = kNormal > 0.0f ? 1.0f / kNormal : 0.0f;
+
+                float kTangent = invMass1 + invMass2;
+                arb.massTangent = kTangent > 0.0f ? 1.0f / kTangent : 0.0f;
+
+                // 计算 Bias (位置修正)
+                arb.bias = -k_biasFactor * inv_dt * std::min(0.0f, arb.separation + k_allowedPenetration);
+
+                // --- Warm Starting: 应用上一帧的冲量 ---
+                glm::vec2 P = arb.Pn * arb.normal + arb.Pt * Cross(arb.normal, 1.0f);
+                b1->velocity -= P * invMass1;
+                b2->velocity += P * invMass2;
+            }
+
+            // --- ApplyImpulse (迭代求解) ---
+            int iterations = 20; // 增加迭代次数以提高致密堆叠的稳定性
+            for (int i = 0; i < iterations; ++i) {
+                for (auto& [key, arb] : _arbiters) {
+                    WordEntity* b1 = arb.body1;
+                    WordEntity* b2 = arb.body2;
+                    float invMass1 = GetInvMass(*b1);
+                    float invMass2 = GetInvMass(*b2);
+
+                    // 1. Normal Impulse (法向脉冲)
+                    glm::vec2 dv = b2->velocity - b1->velocity;
+                    
+                    float vn = Dot(dv, arb.normal);
+                    float dPn = arb.massNormal * (-vn + arb.bias);
+
+                    if (params.restitution > 0.0f) {
+                         dPn -= arb.massNormal * params.restitution * std::min(vn, 0.0f); 
+                    }
+
+                    // Clamp
+                    float Pn0 = arb.Pn;
+                    arb.Pn = std::max(Pn0 + dPn, 0.0f);
+                    dPn = arb.Pn - Pn0;
+
+                    // 应用法向脉冲
+                    glm::vec2 Pn = dPn * arb.normal;
+                    b1->velocity -= Pn * invMass1;
+                    b2->velocity += Pn * invMass2;
+
+                    // 2. Tangent Impulse (Friction / 切向摩擦)
+                    dv = b2->velocity - b1->velocity;
+                    glm::vec2 tangent = Cross(arb.normal, 1.0f);
+                    float vt = Dot(dv, tangent);
+                    float dPt = arb.massTangent * (-vt);
+
+                    float maxPt = arb.friction * arb.Pn;
+
+                    // Clamp friction
+                    float oldPt = arb.Pt;
+                    arb.Pt = std::clamp(oldPt + dPt, -maxPt, maxPt);
+                    dPt = arb.Pt - oldPt;
+
+                    // 应用切向脉冲
+                    glm::vec2 Pt = dPt * tangent;
+                    b1->velocity -= Pt * invMass1;
+                    b2->velocity += Pt * invMass2;
                 }
             }
         }
