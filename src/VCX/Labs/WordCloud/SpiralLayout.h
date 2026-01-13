@@ -32,26 +32,6 @@ namespace VCX::Labs::labf {
             return box;
         }
 
-        // 计算螺旋线位置（基于权重）
-        static inline void CalculateSpiralPosition(
-            float normalizedWeight,  // 0~1，1 表示中心，0 表示外围
-            glm::vec2 const& canvasCenter,
-            float spiralA,
-            float spiralB,
-            float angularOffset,
-            float totalWords,
-            glm::vec2& outPosition)
-        {
-            float maxTheta = totalWords * angularOffset * 3.14159f * 2.0f;
-            float theta    = (1.0f - normalizedWeight) * maxTheta;
-            float r        = spiralA + spiralB * theta;
-
-            outPosition = glm::vec2(
-                canvasCenter.x + r * std::cos(theta),
-                canvasCenter.y + r * std::sin(theta)
-            );
-        }
-
         // 查找不碰撞的螺旋线位置
         static bool FindNonCollidingSpiralPosition(
             WordEntity const& newWord,
@@ -66,19 +46,19 @@ namespace VCX::Labs::labf {
         {
             if (maxAttempts <= 0) maxAttempts = 1000;
 
-            float totalWords = static_cast<float>(existingWords.size() + 1);
-
             for (int attempt = 0; attempt < maxAttempts; ++attempt) {
-                float normalizedWeight = 1.0f - (static_cast<float>(attempt) / static_cast<float>(maxAttempts));
+                // 标准阿基米德螺旋线：theta 随尝试次数线性增加
+                // 这样可以确保从小到大均匀向外搜索，而不会受 totalWords 影响导致搜索范围过小
+                float theta = attempt * angularOffset;
+                float r     = spiralA + spiralB * theta;
 
-                glm::vec2 spiralPos;
-                CalculateSpiralPosition(
-                    normalizedWeight,
-                    canvasCenter,
-                    spiralA, spiralB, angularOffset,
-                    totalWords,
-                    spiralPos
+                glm::vec2 spiralPos(
+                    canvasCenter.x + r * std::cos(theta),
+                    canvasCenter.y + r * std::sin(theta)
                 );
+                
+                // 始终更新输出位置，作为 fallback
+                outPosition = spiralPos;
 
                 BoundingBox newWordAABB = BuildWordAABB(newWord, spiralPos);
                 bool collision = false;
@@ -104,7 +84,6 @@ namespace VCX::Labs::labf {
                 }
 
                 if (!collision) {
-                    outPosition = spiralPos;
                     return true;
                 }
             }

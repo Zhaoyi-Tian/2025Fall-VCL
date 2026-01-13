@@ -366,8 +366,13 @@ namespace VCX::Labs::labf {
         // 每帧调用，使用指定的时间步
         void Update(std::vector<WordEntity>& words, float dt, PhysicsParams& params) {
             if (dt <= 0 || words.empty()) return;
+            
             // 超过最大迭代次数停止模拟，节省性能
-            if (_frameCount >= params.maxIterations) return;
+            // 解耦帧率：将 maxIterations 视为 60FPS 下的帧数（即时间计数）
+            // 无论 dt 是多少，只要物理时间达到 (maxIterations / 60.0) 秒即停止
+            float currentRefFrames = _frameCount * (dt * 60.0f);
+            if (currentRefFrames >= params.maxIterations) return;
+
             Step(words, dt, params);
         }
 
@@ -465,7 +470,9 @@ namespace VCX::Labs::labf {
 
         // 计算当前衰减因子：g(t) = β/(t+1)
         float ComputeDecayFactor(PhysicsParams const& params) {
-            return params.beta / (float)(_frameCount + 1);
+            // 根据时间步长调整 t，使其与帧率解耦 (基准 60FPS)
+            float t = _frameCount * (params.fixedDt * 60.0f);
+            return params.beta / (t + 1.0f);
         }
 
         // 计算词 i 的邻居列表
@@ -565,9 +572,6 @@ namespace VCX::Labs::labf {
                     CollisionInfo info = CheckTwoLevelOBBCollisionDetailed(a, b);
                     if (!info.hasCollision) continue;
 
-                    // **重要修改**：只取穿透最深的一个接触点作为代表
-                    // 这简化了流形管理，并且与 Box2D-Lite 每次 Update 只处理特定 contacts 类似
-                    // 对于 Warm Starting，我们使用 (WordA, WordB) 作为 Key，这样可以稳定地传递冲量
                     
                     glm::vec2 bestNormal(0.0f);
                     float maxDepth = -FLT_MAX;
@@ -614,7 +618,7 @@ namespace VCX::Labs::labf {
             // 调整参数以适应像素坐标系：
             // 1. allowedPenetration: 从 0.01 增加到 2.0，允许轻微重叠以减少抖动
             // 2. biasFactor: 从 0.2 降低到 0.1，使位置修正更柔和
-            float k_allowedPenetration = 1.0f;
+            float k_allowedPenetration = 0.0f;
             float k_biasFactor = 0.1f; 
             float inv_dt = dt > 0.0f ? 1.0f / dt : 0.0f;
 

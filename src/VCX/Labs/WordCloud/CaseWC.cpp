@@ -279,24 +279,22 @@ namespace VCX::Labs::labf {
                     // 螺旋线参数
                     constexpr float spiralA = 0.0f;       // 起始半径
                     constexpr float spiralB = 5.0f;       // 增长速率
-                    constexpr float angularOffset = 0.3f; // 角度偏移（弧度），控制螺旋线密度
+                    constexpr float angularOffset = 0.1f; // 角度偏移（弧度），控制螺旋线密度
 
                     // 排除当前词（索引为 _wm.items().size() - 1）
-                    if (SpiralLayout::FindNonCollidingSpiralPosition(
+                    SpiralLayout::FindNonCollidingSpiralPosition(
                         w, _wm.items(),
                         _wm.items().size() - 1,  // 排除新添加的词
                         canvasCenter,
                         spiralA, spiralB, angularOffset,
                         spiralPos,
-                        500  // 最大尝试次数
-                    )) {
-                        w.position = spiralPos;
-                        w.orientation = 0.0f;  // 水平方向
-                    } else {
-                        // 回退到画布中心
-                        w.position = canvasCenter;
-                        w.orientation = 0.0f;
-                    }
+                        3000  // 增加最大尝试次数
+                    );
+
+                    // 无论是否找到（返回 true/false），都使用最后计算的 spiralPos
+                    // 修改后的 FindNonCollidingSpiralPosition 会在失败时保留最外圈位置
+                    w.position = spiralPos;
+                    w.orientation = 0.0f;  // 水平方向
 
                     if (_enablePhysics && _physicsThread.IsRunning()) {
                         _physicsThread.AddWord(w);
