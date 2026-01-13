@@ -12,7 +12,7 @@
 
 namespace VCX::Labs::labf {
 
-    static constexpr auto c_Size = std::pair(1150U, 800U);
+    static constexpr auto c_Size = std::pair(1500U, 1000U);
 
 
     WordCloud::WordCloud():
@@ -155,16 +155,29 @@ namespace VCX::Labs::labf {
         // === 从 Markdown 文件生成词云 ===
         ImGui::Text("从 Markdown 文件生成词云");
 
-        // 显示已选择的文件（使用自动换行）
+        // 显示已选择的文件（可折叠区域）
+        constexpr size_t kMaxVisibleFiles = 10;  // 最多显示的文件数量
         if (_mdFilePaths.empty()) {
             ImGui::TextDisabled("未选择文件");
         } else {
             ImGui::Text("已选择 %zu 个文件", _mdFilePaths.size());
-            ImGui::PushTextWrapPos(ImGui::GetCursorPos().x + ImGui::GetContentRegionAvail().x - 20);
-            for (size_t i = 0; i < _mdFilePaths.size(); ++i) {
-                ImGui::BulletText("%s", _mdFilePaths[i].c_str());
+
+            // 使用可折叠区域显示文件列表
+            if (ImGui::CollapsingHeader("查看文件列表")) {
+                ImGui::PushTextWrapPos(ImGui::GetCursorPos().x + ImGui::GetContentRegionAvail().x - 20);
+
+                size_t displayCount = std::min(_mdFilePaths.size(), kMaxVisibleFiles);
+                for (size_t i = 0; i < displayCount; ++i) {
+                    ImGui::BulletText("%s", _mdFilePaths[i].c_str());
+                }
+
+                // 如果文件太多，显示省略提示
+                if (_mdFilePaths.size() > kMaxVisibleFiles) {
+                    ImGui::TextDisabled("... 还有 %zu 个文件", _mdFilePaths.size() - kMaxVisibleFiles);
+                }
+
+                ImGui::PopTextWrapPos();
             }
-            ImGui::PopTextWrapPos();
         }
 
         // 词数滑条
@@ -255,8 +268,35 @@ namespace VCX::Labs::labf {
                     float fontSize = SizeMin + (SizeMax - SizeMin) * normalized;
 
                     auto& w = _wm.add(r.text, fontSize);
-                    w.position = glm::vec2(c_Size.first * 0.5f, c_Size.second * 0.5f);
+
+                    // 先初始化 OBB（设置 boxHalfSize 等）
                     InitializeWordOBBs(w, ComputeMaxFontSize());
+
+                    // 使用静态螺旋线布局计算初始位置
+                    glm::vec2 spiralPos;
+                    glm::vec2 canvasCenter(c_Size.first * 0.5f, c_Size.second * 0.5f);
+
+                    // 螺旋线参数
+                    constexpr float spiralA = 0.0f;       // 起始半径
+                    constexpr float spiralB = 5.0f;       // 增长速率
+                    constexpr float angularOffset = 0.3f; // 角度偏移（弧度），控制螺旋线密度
+
+                    // 排除当前词（索引为 _wm.items().size() - 1）
+                    if (SpiralLayout::FindNonCollidingSpiralPosition(
+                        w, _wm.items(),
+                        _wm.items().size() - 1,  // 排除新添加的词
+                        canvasCenter,
+                        spiralA, spiralB, angularOffset,
+                        spiralPos,
+                        500  // 最大尝试次数
+                    )) {
+                        w.position = spiralPos;
+                        w.orientation = 0.0f;  // 水平方向
+                    } else {
+                        // 回退到画布中心
+                        w.position = canvasCenter;
+                        w.orientation = 0.0f;
+                    }
 
                     if (_enablePhysics && _physicsThread.IsRunning()) {
                         _physicsThread.AddWord(w);

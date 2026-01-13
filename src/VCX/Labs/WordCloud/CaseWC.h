@@ -12,6 +12,7 @@
 #include "Labs/WordCloud/PhysicsSimulator.h"
 #include "Labs/WordCloud/PhysicsThread.h"
 #include "Labs/WordCloud/PythonProcessor.h"
+#include "Labs/WordCloud/SpiralLayout.h"
 
 namespace VCX::Labs::labf {
 
