@@ -25,6 +25,7 @@ add_requires("yaml-cpp")
 add_requires("eigen")
 add_requires("freetype")
 add_requires("tinyxml2")
+add_requires("nlohmann_json")
 
 if is_plat("macosx") then
     add_defines("PLATFORM_MACOSX")
@@ -84,6 +85,7 @@ target("engine")
     add_packages("fmt"          , { public = true })
     add_packages("tinyobjloader", { public = true })
     add_packages("yaml-cpp"     , { public = true })
+    add_packages("nlohmann_json", { public = true })
 
     add_includedirs("src/3rdparty", { public = true })
     add_includedirs("src/VCX"     , { public = true })
@@ -111,9 +113,15 @@ target("labf")
     add_headerfiles("src/VCX/Labs/WordCloud/*.h")
     add_headerfiles("src/VCX/Labs/WordCloud/*.hpp")
     add_files      ("src/VCX/Labs/WordCloud/*.cpp")
+    if is_plat("windows") then
+        add_syslinks("comdlg32")  -- GetOpenFileNameW
+    end
     after_build(function (target)
         os.cp("src/VCX/Labs/WordCloud/shaders/*", path.join(target:targetdir(), "assets", "shaders"))
+        -- 使用 . 复制整个 scripts 目录（包括 .venv 子目录）
+        os.cp("src/VCX/Labs/WordCloud/scripts/.", path.join(target:targetdir(), "assets", "scripts"))
     end)
     after_install(function (target)
         os.cp("src/VCX/Labs/WordCloud/shaders/*", path.join(target:installdir(), "bin", "assets", "shaders"))
+        os.cp("src/VCX/Labs/WordCloud/scripts/.", path.join(target:installdir(), "bin", "assets", "scripts"))
     end)

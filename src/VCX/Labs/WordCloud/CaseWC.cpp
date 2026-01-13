@@ -176,6 +176,91 @@ namespace VCX::Labs::labf {
 
         ImGui::Separator();
 
+        // === 从 Markdown 文件生成词云 ===
+        ImGui::Text("从 Markdown 文件生成词云");
+
+        // 显示已选择的文件
+        if (_mdFilePaths.empty()) {
+            ImGui::TextDisabled("未选择文件");
+        } else {
+            ImGui::Text("已选择 %zu 个文件", _mdFilePaths.size());
+            if (ImGui::TreeNode("文件列表")) {
+                for (auto const& path : _mdFilePaths) {
+                    ImGui::BulletText("%s", path.c_str());
+                }
+                ImGui::TreePop();
+            }
+        }
+
+        // 词数滑条
+        ImGui::SliderInt("返回词数", &_topK, 10, 500);
+
+        ImVec2 buttonSize = ImVec2(120, 24);
+        if (ImGui::Button("选择文件", buttonSize)) {
+            auto result = Common::FileDialog::SelectFiles(
+                "选择 Markdown 文件",
+                { {"Markdown", "*.md"}, {"All Files", "*.*"} }
+            );
+            if (result.has_value()) {
+                _mdFilePaths = result.value();
+            }
+        }
+
+        ImGui::SameLine();
+
+        if (ImGui::Button("生成词云", buttonSize)) {
+            if (!_mdFilePaths.empty()) {
+                _pythonStatusMessage = "处理中...";
+                _pythonTask.Reset();
+                _pythonTask.Emplace([this]() {
+                    return PythonProcessor::ProcessMarkdownBatch(_mdFilePaths, _topK);
+                });
+                _pythonTaskCompleted = false;
+            } else {
+                _pythonStatusMessage = "请先选择文件";
+            }
+        }
+
+        // 显示状态消息
+        if (!_pythonStatusMessage.empty()) {
+            ImGui::SameLine();
+            ImGui::Text("%s", _pythonStatusMessage.c_str());
+        }
+
+        // 处理完成结果
+        if (!_pythonTaskCompleted && _pythonTask.HasValue()) {
+            auto results = _pythonTask.Value();
+            _pythonTaskCompleted = true;
+
+            if (!results.empty()) {
+                _pythonStatusMessage = fmt::format("成功解析 {} 个词", results.size());
+
+                // 将结果转换为 WordEntity 并添加到词云
+                float maxWeight = 0;
+                for (auto const& r : results) {
+                    maxWeight = std::max(maxWeight, r.weight);
+                }
+
+                for (auto const& r : results) {
+                    float fontSize = 12.0f + (r.weight / maxWeight) * 48.0f;
+                    auto& w = _wm.add(r.text, fontSize);
+                    w.position = glm::vec2(c_Size.first * 0.5f, c_Size.second * 0.5f);
+                    InitializeWordOBBs(w, ComputeMaxFontSize());
+
+                    if (_enablePhysics && _physicsThread.IsRunning()) {
+                        _physicsThread.AddWord(w);
+                    }
+                }
+                _pythonResult = results;
+            } else {
+                _pythonStatusMessage = "未解析到词语";
+            }
+            _pythonTask.Reset();
+            _recompute = true;
+        }
+
+        ImGui::Separator();
+
         // === 添加词 ===
         ImGui::Text("添加词");
         ImGui::InputText("文本##new", _newWordText, sizeof(_newWordText));

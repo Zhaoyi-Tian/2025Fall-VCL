@@ -4,12 +4,14 @@
 #include "Engine/Async.hpp"
 #include "Labs/Common/ICase.h"
 #include "Labs/Common/ImageRGB.h"
+#include "Labs/Common/FileDialog.h"
 #include "Labs/WordCloud/WordEntity.h"
 #include "Labs/WordCloud/WordManager.h"
 #include "Labs/WordCloud/WordCloudRenderer.h"
 #include "Labs/WordCloud/WordInteract.h"
 #include "Labs/WordCloud/PhysicsSimulator.h"
 #include "Labs/WordCloud/PhysicsThread.h"
+#include "Labs/WordCloud/PythonProcessor.h"
 
 namespace VCX::Labs::labf {
 
@@ -66,6 +68,14 @@ namespace VCX::Labs::labf {
         PhysicsParams _physicsParams;
         bool _enablePhysics = true;
         bool _physicsInitialized = false;
+
+        // Markdown 文件处理
+        std::vector<std::string> _mdFilePaths;
+        int _topK = 100;
+        Engine::Async<std::vector<WordResult>> _pythonTask;
+        std::vector<WordResult> _pythonResult;
+        std::string _pythonStatusMessage = "";
+        bool _pythonTaskCompleted = false;
 
         // 辅助函数：初始化词的三级 OBB
         void InitializeWordOBBs(WordEntity& w, float maxFontSize);
