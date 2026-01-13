@@ -20,7 +20,8 @@ namespace VCX::Labs::labf {
 
         // EdWordle 参数
         float alpha = 0.1f;              // 中心力权重 (公式 3)
-        float beta = 1.0f;               // 力衰减系数 (公式 4): g(t) = β/(t+1)
+        float beta = 1.0f;               // 力衰减系数 (公式 4): g(t) = β/(t/k+1)
+        float decayTimeScale = 5.0f;    // 时间缩放因子 k (用于延缓衰减)
         float lambda = 0.8f;             // 速度阻尼系数 (公式 4)
 
         // 碰撞参数
@@ -29,7 +30,7 @@ namespace VCX::Labs::labf {
         // 时间步参数
         float fixedDt = 1.0f / 120.0f;   // 固定时间步（秒）
         // 停止条件
-        int maxIterations = 80;          // 最大迭代次数（帧数）
+        int maxIterations = 160;          // 最大迭代次数（帧数）
     };
 
     // ============================================================
@@ -468,11 +469,11 @@ namespace VCX::Labs::labf {
             _frameCount++;
         }
 
-        // 计算当前衰减因子：g(t) = β/(t+1)
+        // 计算当前衰减因子：g(t) = β/(t/k+1)
         float ComputeDecayFactor(PhysicsParams const& params) {
             // 根据时间步长调整 t，使其与帧率解耦 (基准 60FPS)
             float t = _frameCount * (params.fixedDt * 60.0f);
-            return params.beta / (t + 1.0f);
+            return params.beta / (t / params.decayTimeScale + 1.0f);
         }
 
         // 计算词 i 的邻居列表
@@ -511,6 +512,19 @@ namespace VCX::Labs::labf {
         void ApplyEdWordleForces(std::vector<WordEntity>& words, PhysicsParams& params) {
             size_t n = words.size();
 
+            // 1. 计算平均质量，用于设定合理的中心质量 M
+            float totalMass = 0.0f;
+            int massCount = 0;
+            for (auto const& w : words) {
+                if (!w.isHighlighted && w.mass > 0) {
+                    totalMass += w.mass;
+                    massCount++;
+                }
+            }
+            // 如果没有有效质量，默认为 1.0，否则取平均值
+            float avgMass = (massCount > 0) ? totalMass / massCount : 1.0f;
+            float M = avgMass; // 使用平均质量作为中心质量
+
             for (size_t i = 0; i < n; ++i) {
                 auto& w = words[i];
                 // 被选中（高亮）的词不受力的影响，但仍参与邻域计算
@@ -532,14 +546,12 @@ namespace VCX::Labs::labf {
                     F_neigh += dir * mag;
                 }
 
-                // 2. 中心力 (公式 2): F^cent_i = m_i × M × r²_ic
+                // 2. 中心力 (公式 2): F^cent_i = m_i × M × r_ic²
                 glm::vec2 toCenter = params.canvasCenter - w.position;
                 float r_c = glm::length(toCenter);
                 glm::vec2 dirCenter = (r_c > 1e-8f) ? toCenter / r_c : glm::vec2(0.0f);
 
-                // F = m_i * M * r² （M = 1，吸引远处词向中心）
-                float M = 1.0f;
-                glm::vec2 F_cent = dirCenter * (w.mass * M * r_c * r_c);
+                glm::vec2 F_cent = dirCenter * (w.mass * M * r_c*r_c);
 
                 // 3. 合力 (公式 3): F_i(t) = F^neigh_i(t) + α · F^cent_i(t)
                 glm::vec2 F_total = F_neigh + params.alpha * F_cent;
