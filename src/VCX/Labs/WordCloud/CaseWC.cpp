@@ -284,7 +284,7 @@ namespace VCX::Labs::labf {
                 }
 
                 // 对数平滑映射参数
-                constexpr float SizeMin = 30.0f;  // 最小字号
+                constexpr float SizeMin = 20.0f;  // 最小字号 (Reduced from 30.0f)
                 constexpr float SizeMax = 75.0f;  // 最大字号
                 constexpr float LogOffset = 1.0f; // log(v + 1) 中的 +1 偏移
 
@@ -329,7 +329,7 @@ namespace VCX::Labs::labf {
                             spiralA, spiralB, angularOffset,
                             _mask,  // 传入蒙版
                             spiralPos,
-                            3000  // 增加最大尝试次数
+                            100000  // 大幅增加尝试次数，配合自适应步长
                         );
                     } else {
                         SpiralLayout::FindNonCollidingSpiralPosition(
@@ -338,7 +338,7 @@ namespace VCX::Labs::labf {
                             canvasCenter,
                             spiralA, spiralB, angularOffset,
                             spiralPos,
-                            3000  // 增加最大尝试次数
+                            100000  // 大幅增加尝试次数
                         );
                     }
 

@@ -77,8 +77,17 @@ namespace VCX::Labs::labf {
                     WordEntity tempNewWord = newWord;
                     tempNewWord.position = spiralPos;
                     tempNewWord.orientation = 0.0f;
+                    
+                    // 允许一定程度的重叠 (Relaxed Collision Check for tighter packing)
+                    // 使用稍微缩小一点的 OBB 进行碰撞检测，允许边缘轻微重叠
+                    // 通过减小 boxHalfSize 实现
+                    WordEntity shrunkNewWord = tempNewWord;
+                    shrunkNewWord.boxHalfSize *= 0.95f; // 允许 20% 的重叠
+                    
+                    WordEntity shrunkExistingWord = existingWord;
+                    shrunkExistingWord.boxHalfSize *= 0.95f;
 
-                    if (CheckTwoLevelOBBCollision(tempNewWord, existingWord)) {
+                    if (CheckTwoLevelOBBCollision(shrunkNewWord, shrunkExistingWord)) {
                         collision = true;
                         break;
                     }
@@ -104,13 +113,19 @@ namespace VCX::Labs::labf {
             float angularOffset,
             Mask const& mask,
             glm::vec2& outPosition,
-            int maxAttempts = 3000)
+            int maxAttempts = 30000)
         {
-            if (maxAttempts <= 0) maxAttempts = 3000;
+            if (maxAttempts <= 0) maxAttempts = 30000;
+
+            float theta = 0.0f;
+            // 使用均匀弧长步长，避免外圈搜索过疏
+            // 步长与词的大小相关，取 min(halfSize) 的一部分，确保不漏掉缝隙
+            float arcStep = std::min(newWord.boxHalfSize.x, newWord.boxHalfSize.y);
+            arcStep = std::clamp(arcStep, 2.0f, 10.0f);
 
             for (int attempt = 0; attempt < maxAttempts; ++attempt) {
                 // 标准阿基米德螺旋线
-                float theta = attempt * angularOffset;
+                // theta 由弧长控制递增
                 float r     = spiralA + spiralB * theta;
 
                 glm::vec2 spiralPos(
@@ -118,10 +133,36 @@ namespace VCX::Labs::labf {
                     canvasCenter.y + r * std::sin(theta)
                 );
 
+                // 立即计算下一次迭代的 theta (dTheta = arcStep / r)
+                float dTheta = (r > 1.0f) ? (arcStep / r) : angularOffset;
+                theta += dTheta;
+
                 // 【新增】检查是否在蒙版区域内
-                if (!mask.IsInside(spiralPos)) {
-                    continue;  // 跳过蒙版外的位置
+                // 1. 坐标转换：Physics (Bottom-Left) -> Mask (Top-Left)
+                glm::vec2 maskPosCenter = spiralPos;
+                maskPosCenter.y = float(mask.GetCanvasSize().y) - spiralPos.y;
+                
+                if (!mask.IsInside(maskPosCenter)) {
+                    continue;  // 中心点不在蒙版内
                 }
+
+                // 2. 检查包围盒四个角点 (确保整个词都在蒙版内)
+                BoundingBox box = BuildWordAABB(newWord, spiralPos);
+                glm::vec2 corners[4] = {
+                    {box.min.x, box.min.y}, {box.max.x, box.min.y},
+                    {box.max.x, box.max.y}, {box.min.x, box.max.y}
+                };
+                
+                bool allInside = true;
+                for (auto& p : corners) {
+                    glm::vec2 mp = p;
+                    mp.y = float(mask.GetCanvasSize().y) - p.y;
+                    if (!mask.IsInside(mp)) {
+                        allInside = false;
+                        break;
+                    }
+                }
+                if (!allInside) continue;
 
                 outPosition = spiralPos;
 
@@ -141,8 +182,17 @@ namespace VCX::Labs::labf {
                     WordEntity tempNewWord = newWord;
                     tempNewWord.position = spiralPos;
                     tempNewWord.orientation = 0.0f;
+                    
+                    // 【改进】蒙版模式下允许更紧密的填充 (Relaxed Collision Check)
+                    // 允许 10% 的初始重叠，因为后续物理模拟会把它们推开
+                    // 这样可以确保小词能够填入大词的缝隙中
+                    WordEntity shrunkNewWord = tempNewWord;
+                    shrunkNewWord.boxHalfSize *= 0.9f; 
+                    
+                    WordEntity shrunkExistingWord = existingWord;
+                    shrunkExistingWord.boxHalfSize *= 0.9f;
 
-                    if (CheckTwoLevelOBBCollision(tempNewWord, existingWord)) {
+                    if (CheckTwoLevelOBBCollision(shrunkNewWord, shrunkExistingWord)) {
                         collision = true;
                         break;
                     }
