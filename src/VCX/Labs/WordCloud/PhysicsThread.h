@@ -8,6 +8,7 @@
 
 #include "Labs/WordCloud/WordEntity.h"
 #include "Labs/WordCloud/PhysicsSimulator.h"
+#include "Labs/WordCloud/Mask.h"
 
 namespace VCX::Labs::labf {
 
@@ -193,6 +194,11 @@ namespace VCX::Labs::labf {
             EnqueueCommand(std::move(cmd));
         }
 
+        // 设置蒙版
+        void SetMask(Mask const* mask) {
+            _simulator.SetMask(mask);
+        }
+
     private:
         void EnqueueCommand(Command&& cmd) {
             std::lock_guard<std::mutex> lock(_commandMutex);
@@ -256,7 +262,8 @@ namespace VCX::Labs::labf {
                         if (w.useTwoLevelBox) {
                             w.wordLevelOBB.halfSize = glm::vec2(w.boxHalfSize.x, w.xHeight * 0.5f);
                         }
-                        w.updateMassFromArea();
+                        float scaleSquared = (_params.pixelsPerUnit > 0.0f) ? (_params.pixelsPerUnit * _params.pixelsPerUnit) : 2500.0f;
+                        w.updateMassFromArea(scaleSquared);
                     }
                     break;
 

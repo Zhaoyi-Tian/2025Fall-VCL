@@ -98,6 +98,11 @@ namespace VCX::Labs::labf {
         // === 语义 ===
         std::vector<float> wordVector;               // 词向量
 
+        // === 调试信息 ===
+        bool        maskCollision = false;           // 本帧是否与蒙版碰撞
+        glm::vec2   maskCollisionPoint { 0.f, 0.f }; // 碰撞点（物理坐标）
+        glm::vec2   maskCollisionNormal { 0.f, 0.f };// 碰撞法线（指向有效区域内部）
+
         // === 辅助方法 ===
         void clearAccumulators() {
             forceAccumulator = glm::vec2(0.f, 0.f);
@@ -107,11 +112,12 @@ namespace VCX::Labs::labf {
             forceAccumulator += f;
         }
 
-        // 根据包围盒面积计算质量
-        void updateMassFromArea() {
+        // 根据包围盒面积计算质量 (需传入画布尺度的平方进行归一化)
+        // normalizedArea = area / (scale * scale)
+        void updateMassFromArea(float scaleSquared) {
             float area = boxHalfSize.x * boxHalfSize.y * 4.0f;
-            mass = area / 1000.f;
-            if (mass < 0.01f) mass = 0.01f;
+            mass = area / scaleSquared;
+            if (mass < 1e-6f) mass = 1e-6f; // 防止质量过小
         }
     };
 

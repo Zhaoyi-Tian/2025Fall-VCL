@@ -248,7 +248,9 @@ namespace VCX::Labs::labf {
         }
 
         const float cornerRadius = 6.0f;
-        const float rotateBufferRadius = 35.0f;
+        // 旋转区域按词的大小比例计算，最小 15 像素，最大 50 像素
+        float halfSize = std::max(half.x, half.y);
+        float rotateBufferRadius = std::clamp(halfSize * 0.25f, 15.0f, 50.0f);
 
         for (int i = 0; i < 4; ++i) {
             float distSq = DistSq(mousePos, corners[i]);

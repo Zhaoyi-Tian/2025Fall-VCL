@@ -13,6 +13,7 @@
 #include "Labs/WordCloud/PhysicsThread.h"
 #include "Labs/WordCloud/PythonProcessor.h"
 #include "Labs/WordCloud/SpiralLayout.h"
+#include "Labs/WordCloud/Mask.h"
 
 namespace VCX::Labs::labf {
 
@@ -27,6 +28,13 @@ namespace VCX::Labs::labf {
         virtual void                     OnProcessInput(ImVec2 const & pos) override;
 
     private:
+        struct DebugPoint {
+            glm::vec2 pos;
+            float life;
+            glm::vec2 normal;
+        };
+        std::vector<DebugPoint> _debugPoints;
+
         Engine::GL::UniqueTexture2D _texture;
 
         Common::ImageRGB _empty;
@@ -66,6 +74,12 @@ namespace VCX::Labs::labf {
         bool _physicsInitialized = false;
         bool _showPhysicsSettingsWindow = false; // 物理设置窗口可见性
 
+        // 蒙版相关
+        bool _enableMask = false;  // 是否启用蒙版
+        bool _showMaskBoundary = false;  // 是否显示蒙版边界（调试用）
+        Mask _mask;                 // 蒙版对象
+        static constexpr const char* c_MaskPath = "assets/images/teapot.png";
+
         // Markdown 文件处理
         std::vector<std::string> _mdFilePaths;
         int _topK = 100;
@@ -74,8 +88,8 @@ namespace VCX::Labs::labf {
         std::string _pythonStatusMessage = "";
         bool _pythonTaskCompleted = false;
 
-        // 辅助函数：初始化词的三级 OBB
-        void InitializeWordOBBs(WordEntity& w, float maxFontSize);
+        // 辅助函数：初始化词的三级 OBB (需要传入画布缩放比例用于质量归一化)
+        void InitializeWordOBBs(WordEntity& w, float maxFontSize, float canvasScale);
 
         // 计算词云中最大字号
         float ComputeMaxFontSize() const;

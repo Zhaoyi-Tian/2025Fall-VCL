@@ -9,6 +9,7 @@
 #include <glm/glm.hpp>
 
 #include "Labs/WordCloud/WordEntity.h"
+#include "Labs/WordCloud/Mask.h"
 
 namespace VCX::Labs::labf {
 
@@ -17,20 +18,20 @@ namespace VCX::Labs::labf {
     // ============================================================
     struct PhysicsParams {
         glm::vec2 canvasCenter { 575.0f, 400.0f };
+        float     pixelsPerUnit { 30.0f }; // EdWordle-code: drawScale = 30
 
-        // EdWordle 参数
-        float alpha = 0.1f;              // 中心力权重 (公式 3)
-        float beta = 1.0f;               // 力衰减系数 (公式 4): g(t) = β/(t/k+1)
-        float decayTimeScale = 5.0f;    // 时间缩放因子 k (用于延缓衰减)
-        float lambda = 0.8f;             // 速度阻尼系数 (公式 4)
+        // EdWordle-code 参数
+        float kCenter = 1.2f;            // 中心力系数 (EdWordle: 1.2) (show.js line 1819)
+        float kNeighbor = 0.0f;          // 邻域力系数 (EdWordle-code 无简单的 1/r^2 斥力，依靠碰撞)
+        float lambda = 0.8f;             // 速度阻尼
 
         // 碰撞参数
-        float restitution = 0.0f;        // 碰撞恢复系数
+        float restitution = 0.2f;        // EdWordle: 0.2 (show.js line 105)
 
         // 时间步参数
-        float fixedDt = 1.0f / 120.0f;   // 固定时间步（秒）
+        float fixedDt = 1.0f / 60.0f;    // EdWordle: 60Hz (show.js line 1494)
         // 停止条件
-        int maxIterations = 160;          // 最大迭代次数（帧数）
+        int maxIterations = 300;         // 增加迭代上限，因为衰减变慢
     };
 
     // ============================================================
@@ -362,12 +363,13 @@ namespace VCX::Labs::labf {
         void Reset() {
             _frameCount = 0;
             _arbiters.clear();
+            _maskArbiters.clear();
         }
 
         // 每帧调用，使用指定的时间步
         void Update(std::vector<WordEntity>& words, float dt, PhysicsParams& params) {
             if (dt <= 0 || words.empty()) return;
-            
+
             // 超过最大迭代次数停止模拟，节省性能
             // 解耦帧率：将 maxIterations 视为 60FPS 下的帧数（即时间计数）
             // 无论 dt 是多少，只要物理时间达到 (maxIterations / 60.0) 秒即停止
@@ -375,6 +377,12 @@ namespace VCX::Labs::labf {
             if (currentRefFrames >= params.maxIterations) return;
 
             Step(words, dt, params);
+        }
+
+        // 设置蒙版
+        void SetMask(Mask const* mask) {
+            _mask = mask;
+            _maskArbiters.clear();  // 蒙版改变时清除旧的碰撞状态
         }
 
     private:
@@ -426,6 +434,21 @@ namespace VCX::Labs::labf {
 
         std::map<ArbiterKey, Arbiter> _arbiters; // 持久化 Arbiter 存储 (Warm Starting)
 
+        // ============================================================
+        // 蒙版边界碰撞相关（使用 Box2D-Lite 风格）
+        // ============================================================
+        struct MaskArbiter {
+            WordEntity* body;       // 被约束的词
+            glm::vec2   normal;     // 指向蒙版内的法线
+            float       separation; // 穿透深度（负值）
+            float       massNormal; // 法向有效质量
+            float       bias;       // 位置修正偏差
+            float       Pn = 0.0f;  // 累积法向脉冲（用于 warm starting）
+        };
+
+        Mask const* _mask = nullptr;  // 蒙版指针
+        std::map<WordEntity*, MaskArbiter> _maskArbiters; // 持久化存储
+
         float GetInvMass(const WordEntity& w) {
             if (w.isHighlighted) return 0.0f; // 高亮时视为质量无限大（固定）
             if (w.mass == 0.0f) return 0.0f;
@@ -457,7 +480,10 @@ namespace VCX::Labs::labf {
             // 这一步会修改速度以满足非穿透约束
             SolveCollisions(words, dt, params);
 
-            // 4. 积分更新位置 (Integrate Positions)
+            // 4. 蒙版边界碰撞求解（新增）
+            SolveMaskCollisions(words, dt, params);
+
+            // 5. 积分更新位置 (Integrate Positions)
             // x2 = x1 + v2 * dt
             for (auto& w : words) {
                 if (!w.isHighlighted) {
@@ -469,12 +495,7 @@ namespace VCX::Labs::labf {
             _frameCount++;
         }
 
-        // 计算当前衰减因子：g(t) = β/(t/k+1)
-        float ComputeDecayFactor(PhysicsParams const& params) {
-            // 根据时间步长调整 t，使其与帧率解耦 (基准 60FPS)
-            float t = _frameCount * (params.fixedDt * 60.0f);
-            return params.beta / (t / params.decayTimeScale + 1.0f);
-        }
+
 
         // 计算词 i 的邻居列表
         // 邻域定义：两词中心连线不与任何第三个词的 OBB 相交
@@ -508,57 +529,51 @@ namespace VCX::Labs::labf {
             return neighbors;
         }
 
-        // 施加 EdWordle 力（论文 3.1.2 节）
+
+        // 施加 EdWordle 力 (Pixel Space Version)
+        // 假设 Position/Velocity 为像素单位，Mass 为公制单位
         void ApplyEdWordleForces(std::vector<WordEntity>& words, PhysicsParams& params) {
             size_t n = words.size();
+            float M = 1.0f; 
+            float ppp = params.pixelsPerUnit > 0.0f ? params.pixelsPerUnit : 30.0f;
 
-            // 1. 计算平均质量，用于设定合理的中心质量 M
-            float totalMass = 0.0f;
-            int massCount = 0;
-            for (auto const& w : words) {
-                if (!w.isHighlighted && w.mass > 0) {
-                    totalMass += w.mass;
-                    massCount++;
-                }
-            }
-            // 如果没有有效质量，默认为 1.0，否则取平均值
-            float avgMass = (massCount > 0) ? totalMass / massCount : 1.0f;
-            float M = avgMass; // 使用平均质量作为中心质量
+            // Decay factor: 1.0 / (iteration + 1)
+            float decay = 1.0f / (float(_frameCount) + 1.0f);
 
             for (size_t i = 0; i < n; ++i) {
                 auto& w = words[i];
-                // 被选中（高亮）的词不受力的影响，但仍参与邻域计算
                 if (w.isHighlighted) continue;
-
                 w.clearAccumulators();
 
-                // 1. 邻域力 (公式 1): F^neigh_i = Σ (m_i × m_j / r²_ij)
-                auto neighbors = FindNeighbors(words, i);
-                glm::vec2 F_neigh(0.0f);
-                for (size_t j : neighbors) {
-                    glm::vec2 delta = words[j].position - w.position;
-                    float r = glm::length(delta);
-                    if (r < 1.0f) r = 1.0f;  // 防止除零
-                    glm::vec2 dir = delta / r;
+                glm::vec2 F_total_pixel(0.0f);
 
-                    // F = m_i * m_j / r² （吸引邻居）
-                    float mag = w.mass * words[j].mass / (r * r);
-                    F_neigh += dir * mag;
+                // 1. 邻域力 (Simplified Repulsion/Attraction)
+                if (params.kNeighbor > 0.0f) {
+                    auto neighbors = FindNeighbors(words, i);
+                    for (size_t j : neighbors) {
+                        glm::vec2 delta = words[j].position - w.position; // Pixels
+                        float r_pixel = glm::length(delta);
+                        if (r_pixel < 1.0f) r_pixel = 1.0f; 
+                        glm::vec2 dir = delta / r_pixel;
+
+                        // F_metric = k * m1 * m2 / r_metric^2
+                        // F_pixel = F_metric * ppp
+                        float mag = params.kNeighbor * w.mass * words[j].mass * ppp * ppp * ppp / (r_pixel * r_pixel);
+                        F_total_pixel += dir * mag;
+                    }
                 }
 
-                // 2. 中心力 (公式 2): F^cent_i = m_i × M × r_ic²
-                glm::vec2 toCenter = params.canvasCenter - w.position;
-                float r_c = glm::length(toCenter);
-                glm::vec2 dirCenter = (r_c > 1e-8f) ? toCenter / r_c : glm::vec2(0.0f);
+                // 2. 中心力 (Reference: EdWordle show.js)
+                // F_metric = m * M * r_metric^2 * kCenter
+                // F_pixel = F_metric * ppp = kCenter * m * M * r_pixel^2 / ppp
+                glm::vec2 toCenter = params.canvasCenter - w.position; // Pixels
+                float r_pixel = glm::length(toCenter);
+                glm::vec2 dirCenter = (r_pixel > 1e-8f) ? toCenter / r_pixel : glm::vec2(0.0f);
 
-                glm::vec2 F_cent = dirCenter * (w.mass * M * r_c*r_c);
+                float magCenter = params.kCenter * w.mass * M * (r_pixel * r_pixel) / ppp;
+                F_total_pixel += dirCenter * magCenter;
 
-                // 3. 合力 (公式 3): F_i(t) = F^neigh_i(t) + α · F^cent_i(t)
-                glm::vec2 F_total = F_neigh + params.alpha * F_cent;
-
-                // 应用衰减 g(t) = β/(t+1)
-                float decay = ComputeDecayFactor(params);
-                w.applyForce(F_total * decay);
+                w.applyForce(F_total_pixel * decay);
             }
         }
 
@@ -702,6 +717,153 @@ namespace VCX::Labs::labf {
                     glm::vec2 Pt = dPt * tangent;
                     b1->velocity -= Pt * invMass1;
                     b2->velocity += Pt * invMass2;
+                }
+            }
+        }
+
+        // ============================================================
+        // 蒙版边界碰撞求解（使用 SDF）
+        // ============================================================
+        void SolveMaskCollisions(std::vector<WordEntity>& words, float dt, PhysicsParams& params) {
+            if (!_mask || !_mask->HasSDF()) return;
+
+            std::map<WordEntity*, MaskArbiter> newArbiters;
+
+            // 获取画布高度，用于坐标系翻转
+            // Physics: Y 轴向上 (Bottom-Left)
+            // Mask:    Y 轴向下 (Top-Left)
+            float canvasHeight = static_cast<float>(_mask->GetCanvasSize().y);
+
+            // --- Broadphase & Narrowphase ---
+            for (auto& w : words) {
+                w.maskCollision = false; // 重置碰撞标记
+
+                if (w.isHighlighted) continue;
+
+                // 获取词的 OBB
+                OBB obb = GetWordOBB(w);
+                auto corners = obb.corners();
+
+                // 找到最深的穿透点
+                float maxPenetration = 0.0f;
+                glm::vec2 bestNormal(0.0f);
+                glm::vec2 collisionPoint(0.0f);
+                bool hasCollision = false;
+
+                // 增加采样点：角点 + 中心点 + 边中点
+                std::vector<glm::vec2> testPoints;
+                testPoints.reserve(9);
+                for (auto& c : corners) testPoints.push_back(c);
+                testPoints.push_back(obb.center);
+                glm::vec2 axisX = obb.axisX() * obb.halfSize.x;
+                glm::vec2 axisY = obb.axisY() * obb.halfSize.y;
+                testPoints.push_back(obb.center + axisX);
+                testPoints.push_back(obb.center - axisX);
+                testPoints.push_back(obb.center + axisY);
+                testPoints.push_back(obb.center - axisY);
+
+                for (auto& p : testPoints) {
+                    // 1. 坐标翻转：Physics (Bottom-Left) -> Mask (Top-Left)
+                    glm::vec2 p_mask = p;
+                    // Physics Y is up, Mask Y is down.
+                    p_mask.y = canvasHeight - p.y;
+
+                    // 使用 SDF 获取精确距离
+                    float sdfDist = _mask->GetSDFDistanceCanvas(p_mask);
+
+                    // 穿透判定 (sdfDist > 0 表示在外部)
+                    if (sdfDist > 0) {
+                        hasCollision = true;
+
+                        // 2. 获取 Mask 坐标系下的法线
+                        glm::vec2 normalMask = _mask->GetSDFNormal(p_mask);
+
+                        // 3. 法线翻转：Mask (Top-Left) -> Physics (Bottom-Left)
+                        // Y 轴方向相反，导数取反
+                        glm::vec2 normalPhys = normalMask;
+                        normalPhys.y = -normalMask.y; 
+                        
+                        // 归一化以防万一
+                        if (glm::length(normalPhys) > 1e-6) {
+                            normalPhys = glm::normalize(normalPhys);
+                        }
+
+                        // 穿透深度
+                        float penetration = sdfDist;
+
+                        if (penetration > maxPenetration) {
+                            maxPenetration = penetration;
+                            bestNormal = normalPhys;
+                            collisionPoint = p;
+                        }
+                    }
+                }
+
+                if (hasCollision) {
+                    // 更新调试信息
+                    w.maskCollision = true;
+                    w.maskCollisionPoint = collisionPoint;
+                    w.maskCollisionNormal = bestNormal;
+                    
+                    MaskArbiter arb;
+                    arb.body = &w;
+                    arb.normal = bestNormal;
+                    arb.separation = -maxPenetration;  // 穿透深度记为负值，用于 Solver
+                    arb.bias = 0.0f;
+
+                    // Warm Starting: 检查是否存在旧的 Arbiter
+                    auto iter = _maskArbiters.find(&w);
+                    if (iter != _maskArbiters.end()) {
+                        arb.Pn = iter->second.Pn;
+                    }
+
+                    newArbiters.insert({&w, arb});
+                }
+            }
+
+            // 更新持久化存储
+            _maskArbiters = newArbiters;
+
+            // --- PreStep & Warm Starting ---
+            float k_allowedPenetration = 0.5f; // 允许少量穿透以减少抖动 (px)
+            float k_biasFactor = 0.2f;         // 降低 Bias 系数 (0.6 -> 0.2) 以减少震荡
+            float inv_dt = dt > 0.0f ? 1.0f / dt : 0.0f;
+
+            for (auto& [body, arb] : _maskArbiters) {
+                float invMass = GetInvMass(*body);
+                if (invMass == 0.0f) continue;
+
+                // 计算有效质量
+                arb.massNormal = invMass > 0.0f ? 1.0f / invMass : 0.0f;
+
+                // 计算 Bias
+                arb.bias = -k_biasFactor * inv_dt * std::min(0.0f, arb.separation + k_allowedPenetration);
+
+                // Warm Starting: 应用上一帧的脉冲
+                body->velocity += arb.Pn * arb.normal * invMass;
+            }
+
+            // --- ApplyImpulse（迭代求解）---
+            // 增加迭代次数 (10 -> 20)，保证复杂边界（如茶壶柄）的约束能被满足
+            int iterations = 20;  
+            for (int i = 0; i < iterations; ++i) {
+                for (auto& [body, arb] : _maskArbiters) {
+                    float invMass = GetInvMass(*body);
+                    if (invMass == 0.0f) continue;
+
+                    // 计算相对速度（这里只有被约束物体的速度）
+                    float vn = glm::dot(body->velocity, arb.normal);
+
+                    // 计算法向脉冲
+                    float dPn = arb.massNormal * (-vn + arb.bias);
+
+                    // Clamp
+                    float oldPn = arb.Pn;
+                    arb.Pn = std::max(oldPn + dPn, 0.0f);
+                    dPn = arb.Pn - oldPn;
+
+                    // 应用脉冲
+                    body->velocity += dPn * arb.normal * invMass;
                 }
             }
         }

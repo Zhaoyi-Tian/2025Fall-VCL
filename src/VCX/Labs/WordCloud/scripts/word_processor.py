@@ -33,24 +33,40 @@ if os.path.exists(stop_words_path):
 
 
 def clean_markdown(raw_md):
-    """清洗 Markdown 内容，移除格式标记"""
+    """
+    清洗 Markdown 内容
+    新增：过滤 (sec-xxx)= 和 {numref}`xxx` 等技术标签
+    """
     text = raw_md
-    # 1. 移除代码块 (```...```)
+    
+    # 1. 移除 MyST 锚点标签，例如: (sec-animation-xxx)=
+    text = re.sub(r'^\(.*\)=', '', text, flags=re.MULTILINE)
+    
+    # 2. 移除 MyST 交叉引用，例如: {numref}`fig-xxx` 或 {ref}`xxx`
+    # 它会移除整个花括号及其后的反引号内容
+    text = re.sub(r'\{.*?\}(`.*?`)?', '', text)
+    
+    # 3. 移除代码块 (```...```)
     text = re.sub(r'```.*?```', '', text, flags=re.DOTALL)
-    # 2. 移除行内代码 (`...`)
+    
+    # 4. 移除行内代码 (`...`)
     text = re.sub(r'`.*?`', '', text)
-    # 3. 移除 LaTeX 公式
-    text = re.sub(r'\$\$[\s\S]*?\$\$', '', text)  # 行间公式
-    text = re.sub(r'\$.*?\$', '', text)  # 行内公式
-    # 4. 移除图片和链接语法，只保留描述文字内容
-    text = re.sub(r'!\[.*?\]\(.*?\)', '', text)  # 删掉图片
-    text = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', text)  # 链接保留文字
-    # 5. 移除 Markdown 标识符（标题、粗体、斜体等）
-    text = re.sub(r'[#*>-]', ' ', text)
-    # 6. 移除 HTML 标签
+    
+    # 5. 移除 LaTeX 公式
+    text = re.sub(r'\$\$[\s\S]*?\$\$', '', text)  # 行间
+    text = re.sub(r'\$.*?\$', '', text)           # 行内
+    
+    # 6. 移除图片和链接语法
+    text = re.sub(r'!\[.*?\]\(.*?\)', '', text)  
+    text = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', text)  
+    
+    # 7. 移除 Markdown 标识符和 HTML 标签
+    text = re.sub(r'[#*>\-]', ' ', text)
     text = re.sub(r'<.*?>', '', text)
-    # 7. 移除多余空白
+    
+    # 8. 移除多余空白
     text = re.sub(r'\s+', ' ', text)
+    
     return text.strip()
 
 def process_multiple_md(file_paths, top_k=100):

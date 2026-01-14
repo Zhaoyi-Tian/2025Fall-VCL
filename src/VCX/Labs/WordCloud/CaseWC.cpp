@@ -22,6 +22,14 @@ namespace VCX::Labs::labf {
         _currentFontIndex(DefaultWordCloudFontIndex) {
 
         // 初始为空词云，等待用户选择文件生成
+
+        // 尝试加载蒙版（加载但不自动启用）
+        if (_mask.Load(c_MaskPath, glm::ivec2(c_Size.first, c_Size.second))) {
+            _mask.GenerateSDF();  // 生成 SDF
+            spdlog::info("WordCloud: mask loaded and SDF generated from {}", c_MaskPath);
+        } else {
+            spdlog::warn("WordCloud: failed to load mask from {}", c_MaskPath);
+        }
     }
 
     void WordCloud::OnSetupPropsUI() {
@@ -56,6 +64,9 @@ namespace VCX::Labs::labf {
         // === 物理模拟控制 ===
         if (ImGui::Checkbox("启用物理", &_enablePhysics)) {
             if (_enablePhysics && _physicsInitialized) {
+                // 确保参数中心与画布大小对齐（因为初始默认值可能不对）
+                _physicsParams.canvasCenter = glm::vec2(c_Size.first * 0.5f, c_Size.second * 0.5f);
+
                 // 重新启动物理线程，从当前 _wm 状态开始
                 _physicsThread.Start(_wm.items(), _physicsParams);
             } else {
@@ -91,7 +102,8 @@ namespace VCX::Labs::labf {
                 ImGui::SetNextWindowSize(ImVec2(350, 280), ImGuiCond_Always);
                 ImGui::Begin("物理参数设置", &_showPhysicsSettingsWindow);
                 bool paramsChanged = false;
-                paramsChanged |= ImGui::SliderFloat("中心力权重", &_physicsParams.alpha, 0.0f, 1.0f);
+                paramsChanged |= ImGui::SliderFloat("中心力权重", &_physicsParams.kCenter, 0.0f, 2.0f);
+                paramsChanged |= ImGui::SliderFloat("邻域力权重", &_physicsParams.kNeighbor, 0.0f, 30.0f);
                 paramsChanged |= ImGui::SliderFloat("速度阻尼", &_physicsParams.lambda, 0.5f, 0.99f);
                 paramsChanged |= ImGui::SliderFloat("弹性系数", &_physicsParams.restitution, 0.0f, 1.0f);
 
@@ -126,7 +138,7 @@ namespace VCX::Labs::labf {
                             // 换字体时刷新所有词的三级 OBB
                             float maxFontSize = ComputeMaxFontSize();
                             for (auto& w : _wm.items()) {
-                                InitializeWordOBBs(w, maxFontSize);
+                                InitializeWordOBBs(w, maxFontSize, _physicsParams.pixelsPerUnit);
                             }
                             // 如果物理线程运行中，同步 OBB 更新并重置模拟
                             if (_enablePhysics && _physicsThread.IsRunning()) {
@@ -143,6 +155,28 @@ namespace VCX::Labs::labf {
             }
         } else {
             ImGui::TextDisabled("未找到字体");
+        }
+
+        ImGui::Separator();
+
+        // === 蒙版设置 ===
+        ImGui::Text("蒙版设置");
+        if (ImGui::Checkbox("启用蒙版", &_enableMask)) {
+            if (_enableMask && !_mask.IsValid()) {
+                // 尝试加载蒙版
+                if (!_mask.Load(c_MaskPath, glm::ivec2(c_Size.first, c_Size.second))) {
+                    _enableMask = false;
+                    _pythonStatusMessage = "蒙版加载失败";
+                }
+            }
+            // 设置蒙版到物理线程
+            _physicsThread.SetMask(_enableMask ? &_mask : nullptr);
+            // 重置模拟
+            _physicsThread.ResetSimulator();
+            _recompute = true;
+        }
+        if (ImGui::Checkbox("显示蒙版边界", &_showMaskBoundary)) {
+            _recompute = true;
         }
 
         ImGui::Separator();
@@ -269,8 +303,12 @@ namespace VCX::Labs::labf {
 
                     auto& w = _wm.add(r.text, fontSize);
 
-                    // 先初始化 OBB（设置 boxHalfSize 等）
-                    InitializeWordOBBs(w, ComputeMaxFontSize());
+                    // 先初始化 OBB（使用像素单位，scale=1.0，确保渲染和碰撞检测尺度一致）
+                    float ppp = _physicsParams.pixelsPerUnit > 0 ? _physicsParams.pixelsPerUnit : 30.0f;
+                    InitializeWordOBBs(w, ComputeMaxFontSize(), 1.0f);
+                    
+                    // 单独更新质量为公制单位 (Mass = AreaMeters = AreaPixels / ppp^2)
+                    w.updateMassFromArea(ppp * ppp);
 
                     // 使用静态螺旋线布局计算初始位置
                     glm::vec2 spiralPos;
@@ -282,14 +320,27 @@ namespace VCX::Labs::labf {
                     constexpr float angularOffset = 0.1f; // 角度偏移（弧度），控制螺旋线密度
 
                     // 排除当前词（索引为 _wm.items().size() - 1）
-                    SpiralLayout::FindNonCollidingSpiralPosition(
-                        w, _wm.items(),
-                        _wm.items().size() - 1,  // 排除新添加的词
-                        canvasCenter,
-                        spiralA, spiralB, angularOffset,
-                        spiralPos,
-                        3000  // 增加最大尝试次数
-                    );
+                    // 根据是否启用蒙版选择布局函数
+                    if (_enableMask) {
+                        SpiralLayout::FindNonCollidingSpiralPositionWithMask(
+                            w, _wm.items(),
+                            _wm.items().size() - 1,  // 排除新添加的词
+                            canvasCenter,
+                            spiralA, spiralB, angularOffset,
+                            _mask,  // 传入蒙版
+                            spiralPos,
+                            3000  // 增加最大尝试次数
+                        );
+                    } else {
+                        SpiralLayout::FindNonCollidingSpiralPosition(
+                            w, _wm.items(),
+                            _wm.items().size() - 1,  // 排除新添加的词
+                            canvasCenter,
+                            spiralA, spiralB, angularOffset,
+                            spiralPos,
+                            3000  // 增加最大尝试次数
+                        );
+                    }
 
                     // 无论是否找到（返回 true/false），都使用最后计算的 spiralPos
                     // 修改后的 FindNonCollidingSpiralPosition 会在失败时保留最外圈位置
@@ -319,18 +370,26 @@ namespace VCX::Labs::labf {
 
         // 延迟初始化（确保 ImGui 字体已经准备好）
         if (_wordCloudRenderer->Initialize(fontPath)) {
+            // 初始化物理参数的画布中心
+            _physicsParams.canvasCenter = glm::vec2(c_Size.first * 0.5f, c_Size.second * 0.5f);
+            
+            // EdWordle 使用 30
+            _physicsParams.pixelsPerUnit = 30.0f; 
+
             // 初始化成功后，计算最大字号并初始化所有词的三级 OBB
             float maxFontSize = ComputeMaxFontSize();
             for (auto& w : _wm.items()) {
-                InitializeWordOBBs(w, maxFontSize);
+                InitializeWordOBBs(w, maxFontSize, _physicsParams.pixelsPerUnit);
             }
-            // 初始化物理参数的画布中心
-            _physicsParams.canvasCenter = glm::vec2(c_Size.first * 0.5f, c_Size.second * 0.5f);
 
             // 启动物理线程
             if (_enablePhysics && !_physicsInitialized) {
                 _physicsThread.Start(_wm.items(), _physicsParams);
                 _physicsInitialized = true;
+                // 设置蒙版
+                if (_enableMask) {
+                    _physicsThread.SetMask(&_mask);
+                }
             }
         }
 
@@ -401,6 +460,38 @@ namespace VCX::Labs::labf {
                     labf::DrawCollisionBox(dl, canvasOrigin, float(c_Size.second), (*currentWordsPtr)[i]);
                 }
             }
+
+            // 绘制蒙版边界（使用 SDF）
+            if (_showMaskBoundary && _mask.IsValid() && _mask.HasSDF()) {
+                float scaledWidth = _mask.GetImageSize().x * _mask.GetScale();
+                float scaledHeight = _mask.GetImageSize().y * _mask.GetScale();
+                float offsetX = (c_Size.first - scaledWidth) * 0.5f;
+                float offsetY = (c_Size.second - scaledHeight) * 0.5f;
+
+                ImU32 boundaryColor = IM_COL32(255, 0, 0, 255);  // 红色边界
+
+                // 使用 SDF 采样边界点
+                int step = 1;  // 每个像素都检查，更精确
+
+                for (int imgY = 0; imgY < _mask.GetImageSize().y; imgY += step) {
+                    for (int imgX = 0; imgX < _mask.GetImageSize().x; imgX += step) {
+                        // 转换为画布坐标
+                        float canvasX = offsetX + imgX * _mask.GetScale();
+                        float canvasY = offsetY + imgY * _mask.GetScale();
+
+                        // 使用 SDF 检查是否是边界点
+                        // SDF 也是基于像素距离的，现在的 SDF 在边界处（整数坐标上）绝对值最小为 1.0
+                        // 所以需要增大阈值才能显示出边界
+                        if (_mask.IsOnBoundary(glm::vec2(canvasX, canvasY), 0.6f)) {
+                            dl->AddRect(
+                                ImVec2(canvasOrigin.x + canvasX, canvasOrigin.y + canvasY),
+                                ImVec2(canvasOrigin.x + canvasX + _mask.GetScale(), canvasOrigin.y + canvasY + _mask.GetScale()),
+                                boundaryColor
+                            );
+                        }
+                    }
+                }
+            }
         }
 
         // 使用 Gizmo 交互系统处理词云交互（只读，返回增量变化）
@@ -453,7 +544,7 @@ namespace VCX::Labs::labf {
                             auto& [fontSize, boxHalfSize] = result.newFontSizes[i];
                             mutableW.fontSize = fontSize;
                             // 使用三级 OBB 更新
-                            InitializeWordOBBs(mutableW, std::max(maxFontSize, fontSize));
+                            InitializeWordOBBs(mutableW, std::max(maxFontSize, fontSize), _physicsParams.pixelsPerUnit);
                             // 发送 OBB 更新命令
                             _physicsThread.UpdateWordOBB(idx, mutableW);
                         }
@@ -493,13 +584,55 @@ namespace VCX::Labs::labf {
                             auto& [fontSize, boxHalfSize] = result.newFontSizes[i];
                             w.fontSize = fontSize;
                             // 使用三级 OBB 更新
-                            InitializeWordOBBs(w, std::max(maxFontSize, fontSize));
+                            float scale = _physicsParams.pixelsPerUnit > 0 ? _physicsParams.pixelsPerUnit : 30.0f;
+                            InitializeWordOBBs(w, std::max(maxFontSize, fontSize), scale);
                         }
                     }
                 }
             }
 
             _recompute = true;
+        }
+
+        // ============================================================
+        // 渲染调试碰撞点
+        // ============================================================
+        {
+            ImDrawList* dl = ImGui::GetForegroundDrawList();
+            float dt = ImGui::GetIO().DeltaTime;
+            
+            // 收集新的碰撞点
+            for (const auto& w : *currentWordsPtr) {
+                if (w.maskCollision) {
+                    glm::vec2 screenPos;
+                    screenPos.x = canvasOrigin.x + w.maskCollisionPoint.x;
+                    screenPos.y = canvasOrigin.y + (c_Size.second - w.maskCollisionPoint.y);
+
+                    // 转换法线到屏幕空间（Y轴翻转：向上 -> 向下）
+                    glm::vec2 screenNormal = w.maskCollisionNormal;
+                    screenNormal.y = -screenNormal.y;
+
+                    _debugPoints.push_back({screenPos, 1.0f, screenNormal}); // 持续 1.0 秒，包含法线
+                }
+            }
+
+            // 绘制并更新调试点
+            for (auto it = _debugPoints.begin(); it != _debugPoints.end();) {
+                // 绘制点
+                dl->AddCircleFilled(ImVec2(it->pos.x, it->pos.y), 3.0f, IM_COL32(255, 0, 0, 200));
+                
+                // 绘制法线
+                ImVec2 p1(it->pos.x, it->pos.y);
+                ImVec2 p2(it->pos.x + it->normal.x * 20.0f, it->pos.y + it->normal.y * 20.0f);
+                dl->AddLine(p1, p2, IM_COL32(0, 255, 0, 255), 2.0f); // 绿色法线
+
+                it->life -= dt;
+                if (it->life <= 0) {
+                    it = _debugPoints.erase(it);
+                } else {
+                    ++it;
+                }
+            }
         }
     }
 
@@ -513,7 +646,7 @@ namespace VCX::Labs::labf {
     }
 
     // 初始化词的 OBB 系统
-    void WordCloud::InitializeWordOBBs(WordEntity& w, float maxFontSize) {
+    void WordCloud::InitializeWordOBBs(WordEntity& w, float maxFontSize, float canvasScale) {
         // 使用 MeasureTextDetailed 获取完整度量信息
         TextMetrics metrics = _wordCloudRenderer->MeasureTextDetailed(w.text, w.fontSize);
 
@@ -545,7 +678,8 @@ namespace VCX::Labs::labf {
             w.letterOBBs.clear();
         }
 
-        // 计算质量
-        w.updateMassFromArea();
+        // 计算质量 (归一化质量)
+        float scaleSquared = (canvasScale > 0.0f) ? canvasScale * canvasScale : 1.0f;
+        w.updateMassFromArea(scaleSquared);
     }
 } // namespace VCX::Labs::labf
