@@ -1,7 +1,3 @@
----
-typora-root-url: ./
----
-
 # 可视计算与交互概论大作业作业报告
 
 选题：**Word Cloud**
@@ -11,8 +7,8 @@ typora-root-url: ./
 我在lab代码框架的基础上实现了Word Cloud生成和编辑，主要是复现了信息数据可视化部分PPT中[EdWordle: Consistency-preserving Word Cloud Editing](https://cfcs.pku.edu.cn/baoquan/docs/20180622095059241416.pdf)论文中3.1节**自定义刚体动力学模拟**的算法（将单词视为刚体，通过相邻力、中心力 + 阻尼策略维持邻域关系与布局紧凑），并加上了简单的蒙版功能。
 
 <div style="display: flex; justify-content: space-between;">
-  <img src="C:\Users\50376\AppData\Roaming\Typora\typora-user-images\image-20260114205936370.png" style="width: 48%;" />
-  <img src="C:\Users\50376\AppData\Roaming\Typora\typora-user-images\image-20260114205720744.png" style="width: 48%;" />
+  <img src="images\image-20260114205936370.png" style="width: 48%;" />
+  <img src="images\image-20260114205720744.png" style="width: 48%;" />
 </div>
 ## 运行方法
 
