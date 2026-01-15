@@ -8,4 +8,5 @@ vsxmake*
 docs/html
 docs/latex
 
+.venv/
 .DS_Store
