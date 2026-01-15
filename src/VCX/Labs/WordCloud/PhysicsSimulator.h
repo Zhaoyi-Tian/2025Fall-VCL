@@ -13,28 +13,20 @@
 
 namespace VCX::Labs::labf {
 
-    // ============================================================
-    // EdWordle 论文 3.1 节物理模拟参数
-    // ============================================================
     struct PhysicsParams {
         glm::vec2 canvasCenter { 575.0f, 400.0f };
-        float     pixelsPerUnit { 30.0f }; // EdWordle-code: drawScale = 30
+        float     pixelsPerUnit { 30.0f };
 
-        // EdWordle-code 参数
-        float kCenter = 1.2f;            // 中心力系数 (EdWordle: 1.2) (show.js line 1819)
-        float kNeighbor = 0.0f;          // 邻域力系数 (EdWordle-code 无简单的 1/r^2 斥力，依靠碰撞)
+        float kCenter = 3.0f;            // 中心力系数
+        float kNeighbor = 0.0f;          // 邻域力系数
         float lambda = 0.8f;             // 速度阻尼
 
-        // 碰撞参数
-        float restitution = 0.2f;        // EdWordle: 0.2 (show.js line 105)
+        float restitution = 0.2f;        // 弹性系数
 
-        // 时间步参数
-        float fixedDt = 1.0f / 60.0f;    // EdWordle: 60Hz (show.js line 1494)
-        // 停止条件
-        int maxIterations = 300;         // 增加迭代上限，因为衰减变慢
+        float fixedDt = 1.0f / 60.0f;    // 物理时间步
+        int maxIterations = 300;         // 最大迭代次数
     };
 
-    // ============================================================
     // OBB 辅助函数
     // ============================================================
 
@@ -312,12 +304,10 @@ namespace VCX::Labs::labf {
         return info;
     }
 
-    // ============================================================
     // 邻域搜索：线段-AABB 相交检测
     // ============================================================
 
     // 检查线段 (p1, p2) 是否与 AABB 相交
-    // 使用参数化射线求交算法
     inline bool LineIntersectsAABB(glm::vec2 p1, glm::vec2 p2, BoundingBox const& box) {
         glm::vec2 d = p2 - p1;
         float tmin = 0.0f;
@@ -354,8 +344,7 @@ namespace VCX::Labs::labf {
         return true;
     }
 
-    // ============================================================
-    // EdWordle 物理模拟器
+    // 物理模拟器
     // ============================================================
     class PhysicsSimulator {
     public:
@@ -388,12 +377,12 @@ namespace VCX::Labs::labf {
     private:
         int _frameCount = 0;      // 物理步计数器
 
-        // Box2D-Lite 风格的数学辅助函数
+        // 数学辅助函数
         static inline float Dot(glm::vec2 const& a, glm::vec2 const& b) { return glm::dot(a, b); }
         static inline float Cross(glm::vec2 const& a, glm::vec2 const& b) { return a.x * b.y - a.y * b.x; }
         static inline glm::vec2 Cross(glm::vec2 const& a, float s) { return { s * a.y, -s * a.x }; }
 
-        // 内部 Arbiter 结构，模拟 box2d-lite 的接触约束
+        // 碰撞约束结构
         struct Arbiter {
             WordEntity* body1;
             WordEntity* body2;
@@ -432,73 +421,66 @@ namespace VCX::Labs::labf {
             }
         };
 
-        std::map<ArbiterKey, Arbiter> _arbiters; // 持久化 Arbiter 存储 (Warm Starting)
+        std::map<ArbiterKey, Arbiter> _arbiters;
 
-        // ============================================================
-        // 蒙版边界碰撞相关（使用 Box2D-Lite 风格）
+        // 蒙版边界碰撞相关
         // ============================================================
         struct MaskArbiter {
-            WordEntity* body;       // 被约束的词
-            glm::vec2   normal;     // 指向蒙版内的法线
-            float       separation; // 穿透深度（负值）
-            float       massNormal; // 法向有效质量
-            float       bias;       // 位置修正偏差
-            float       Pn = 0.0f;  // 累积法向脉冲（用于 warm starting）
+            WordEntity* body;
+            glm::vec2   normal;
+            float       separation;
+            float       massNormal;
+            float       bias;
+            float       Pn = 0.0f;
         };
 
-        Mask const* _mask = nullptr;  // 蒙版指针
-        std::map<WordEntity*, MaskArbiter> _maskArbiters; // 持久化存储
+        Mask const* _mask = nullptr;
+        std::map<WordEntity*, MaskArbiter> _maskArbiters;
 
         float GetInvMass(const WordEntity& w) {
-            if (w.isHighlighted) return 0.0f; // 高亮时视为质量无限大（固定）
+            if (w.isHighlighted) return 0.0f;
             if (w.mass == 0.0f) return 0.0f;
             return 1.0f / w.mass;
         }
 
-        // 单步物理模拟（固定 dt）
-        // 流程调整为符合 Box2D-Lite: Forces -> Velocity -> Solve -> Position
+        // 单步物理模拟
         void Step(std::vector<WordEntity>& words, float dt, PhysicsParams& params) {
             if (dt <= 0 || words.empty()) return;
 
-            // 1. 施加 EdWordle 力 (Force Integration 的一部分)
+            // 施加力
             ApplyEdWordleForces(words, params);
 
-            // 2. 积分更新速度 (Integrate Velocities from Forces)
-            // v2 = v1 + (F/m) * dt
+            // 积分更新速度
             for (auto& w : words) {
                 if (!w.isHighlighted) {
                     float invMass = GetInvMass(w);
                     if (invMass > 0.0f) {
                         w.velocity += w.forceAccumulator * invMass * dt;
                     }
-                    // 保留原有的线性阻尼逻辑
                     w.velocity *= params.lambda;
                 }
             }
 
-            // 3. 碰撞检测与求解 (Constraint Solver)
-            // 这一步会修改速度以满足非穿透约束
+            // 碰撞检测与求解
             SolveCollisions(words, dt, params);
 
-            // 4. 蒙版边界碰撞求解（新增）
+            // 蒙版边界碰撞求解
             SolveMaskCollisions(words, dt, params);
 
-            // 5. 积分更新位置 (Integrate Positions)
-            // x2 = x1 + v2 * dt
+            // 积分更新位置
             for (auto& w : words) {
                 if (!w.isHighlighted) {
                     w.position += w.velocity * dt;
                 }
             }
 
-            // 5. 增加帧计数器
+            // 增加帧计数器
             _frameCount++;
         }
 
 
 
         // 计算词 i 的邻居列表
-        // 邻域定义：两词中心连线不与任何第三个词的 OBB 相交
         std::vector<size_t> FindNeighbors(std::vector<WordEntity> const& words, size_t i) {
             std::vector<size_t> neighbors;
             size_t n = words.size();
@@ -529,6 +511,30 @@ namespace VCX::Labs::labf {
             return neighbors;
         }
 
+        // 检查线段是否穿过蒙版无效区域
+        // p1: 起点, p2: 终点, step: 采样步长 (像素)
+        bool IsLineInMask(glm::vec2 p1, glm::vec2 p2, float step) const {
+            if (!_mask) return true; // 无蒙版时默认都在“内”
+            
+            glm::vec2 d = p2 - p1;
+            float len = glm::length(d);
+            if (len < 1e-4f) return true; 
+
+            // 步长太小会影响性能，太大漏检测
+            if (step < 1.0f) step = 1.0f;
+
+            int count = static_cast<int>(len / step);
+            glm::vec2 dir = d / len;
+            
+            for (int k = 0; k <= count; ++k) {
+                glm::vec2 p = p1 + dir * (float(k) * step);
+                if (!_mask->IsInside(p)) return false;
+            }
+            // 确保终点被检测
+            if (!_mask->IsInside(p2)) return false;
+            
+            return true;
+        }
 
         // 施加 EdWordle 力 (Pixel Space Version)
         // 假设 Position/Velocity 为像素单位，Mass 为公制单位
@@ -538,7 +544,7 @@ namespace VCX::Labs::labf {
             float ppp = params.pixelsPerUnit > 0.0f ? params.pixelsPerUnit : 30.0f;
 
             // Decay factor: 1.0 / (iteration + 1)
-            float decay = 1.0f / (float(_frameCount) + 1.0f);
+            float decay = 1.0f / (float(_frameCount)/5 + 1.0f);
 
             for (size_t i = 0; i < n; ++i) {
                 auto& w = words[i];
@@ -571,13 +577,22 @@ namespace VCX::Labs::labf {
                 glm::vec2 dirCenter = (r_pixel > 1e-8f) ? toCenter / r_pixel : glm::vec2(0.0f);
 
                 float magCenter = params.kCenter * w.mass * M * (r_pixel * r_pixel) / ppp;
+                
+                // [Mask Constraint] 如果到中心的路径被蒙版阻断（穿过无效区域），则不施加中心力
+                // 防止词跨越空洞移动，保持形状
+                if (_mask && magCenter > 0.0f) {
+                    // 使用 10像素作为采样步长，平衡性能与精度
+                    if (!IsLineInMask(w.position, params.canvasCenter, 10.0f)) {
+                        magCenter = 0.0f;
+                    }
+                }
+
                 F_total_pixel += dirCenter * magCenter;
 
                 w.applyForce(F_total_pixel * decay);
             }
         }
 
-        // 使用 Box2D-Lite 逻辑 (Arbiter.cpp) 解决碰撞
         void SolveCollisions(std::vector<WordEntity>& words, float dt, PhysicsParams& params) {
             std::map<ArbiterKey, Arbiter> newArbiters;
             size_t n = words.size();

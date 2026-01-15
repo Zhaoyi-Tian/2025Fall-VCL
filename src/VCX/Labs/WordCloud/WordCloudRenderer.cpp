@@ -183,29 +183,23 @@ TextMetrics WordCloudRenderer::MeasureTextDetailed(const std::string& text, floa
     metrics.width = totalWidth;
     metrics.fullHeight = maxY - minY;
 
-    // x-height：使用字体的 x-height（字母 'x' 的高度）
+    // x-height：使用字体的 x-height
     metrics.xHeight = static_cast<float>(atlas->GetXHeight()) * fontSize;
 
-    // 基线位置：基线在 y=0，中心在 (minY + maxY) / 2
-    // baselineY = 0 - center = -(minY + maxY) / 2
+    // 基线位置
     float centerY = (minY + maxY) * 0.5f;
     metrics.baselineY = -centerY;
 
-    // 计算 x-height 区域中心（与 ComputeLetterOBBs 完全一致的方式）
-    // 使用 'x' 字符的 planeBounds
+    // x-height 区域中心
     const auto& xGlyph = atlas->GetGlyph('x');
     if (xGlyph.valid && xGlyph.uvMin != xGlyph.uvMax) {
-        // 与 ComputeLetterOBBs 完全一致的计算方式：
-        // localCenter.y = penY + (planeBoundsMin.y + planeBoundsMax.y) / 2 * scale
-        // penY = -centerY = baselineY
         float xCenterInGlyph = (xGlyph.planeBoundsMin.y + xGlyph.planeBoundsMax.y) * 0.5f * scale;
         metrics.xHeightCenterY = metrics.baselineY + xCenterInGlyph;
     } else {
-        // 降级：使用 xHeight 的中点
         metrics.xHeightCenterY = metrics.baselineY + metrics.xHeight * 0.5f;
     }
 
-    // 如果计算的高度太小，使用降级值
+    // 降级检查
     if (metrics.fullHeight < fontSize * 0.5f) {
         metrics.fullHeight = static_cast<float>(atlas->GetAscender() - atlas->GetDescender()) * fontSize;
     }

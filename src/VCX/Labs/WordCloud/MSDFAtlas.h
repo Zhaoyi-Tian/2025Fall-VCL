@@ -64,7 +64,7 @@ public:
     double GetAscender() const { return _fontMetrics.ascenderY; }
     double GetDescender() const { return _fontMetrics.descenderY; }
     double GetLineHeight() const { return _fontMetrics.lineHeight; }
-    double GetXHeight() const { return _xHeight; }  // EdWordle: 字母 'x' 的高度
+    double GetXHeight() const { return _xHeight; }
 
     /// Check if initialized
     bool IsInitialized() const { return _initialized; }
@@ -85,7 +85,7 @@ private:
 
     // Font metrics
     msdfgen::FontMetrics _fontMetrics;
-    double _xHeight = 0.5;  // 字母 'x' 的高度（em 单位），用于 EdWordle OBB
+    double _xHeight = 0.5;  // x-height（em 单位）
 
     // Atlas configuration
     int _initialSize;

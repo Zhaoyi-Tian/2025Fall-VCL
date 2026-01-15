@@ -55,12 +55,12 @@ namespace VCX::Labs::Common::ImGuiHelper {
         if (enableWrite) {
             saving = true;
             gl_using(tex);
-            char * rawImg = new char[sizeof(char) * texSize.first * texSize.second * 3];
+            char * rawImg = new char[sizeof(char) * texSize.first * texSize.second * 4];
             glPixelStorei(GL_PACK_ALIGNMENT, 1);
-            glGetTexImage(GL_TEXTURE_2D, 0, GL_RGB, GL_UNSIGNED_BYTE, rawImg);
+            glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, rawImg);
             glPixelStorei(GL_PACK_ALIGNMENT, 4);
             stbi_flip_vertically_on_write(flipped);
-            stbi_write_png(path, texSize.first, texSize.second, 3, rawImg, 3 * texSize.first);
+            stbi_write_png(path, texSize.first, texSize.second, 4, rawImg, 4 * texSize.first);
             delete[] rawImg;
             ImGui::OpenPopup("Saved");
         }

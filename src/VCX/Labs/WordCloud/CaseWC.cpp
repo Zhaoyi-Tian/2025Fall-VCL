@@ -3,8 +3,11 @@
 #include <cstring>
 #include <cstdio>
 #include <chrono>
+#include <fstream>
+#include <filesystem>
 #include <iostream>
 
+#include "Engine/Formats.hpp"
 #include "Labs/WordCloud/CaseWC.h"
 #include "Labs/Common/ImGuiHelper.h"
 #include "Labs/WordCloud/WordInteract.h"
@@ -13,6 +16,35 @@
 namespace VCX::Labs::labf {
 
     static constexpr auto c_Size = std::pair(1500U, 1000U);
+    static constexpr size_t c_MaxInputTextSize = 1024 * 50; // 50KB
+
+    // Helper to convert HSL to RGB
+    // h, l, s are in [0, 1]
+    static glm::vec3 HSLToRGB(float h, float l, float s) {
+        auto hue2rgb = [](float p, float q, float t) {
+            if (t < 0.0f) t += 1.0f;
+            if (t > 1.0f) t -= 1.0f;
+            if (t < 1.0f / 6.0f) return p + (q - p) * 6.0f * t;
+            if (t < 1.0f / 2.0f) return q;
+            if (t < 2.0f / 3.0f) return p + (q - p) * (2.0f / 3.0f - t) * 6.0f;
+            return p;
+        };
+
+        float q = l < 0.5f ? l * (1.0f + s) : l + s - l * s;
+        float p = 2.0f * l - q;
+        float r = hue2rgb(p, q, h + 1.0f / 3.0f);
+        float g = hue2rgb(p, q, h);
+        float b = hue2rgb(p, q, h - 1.0f / 3.0f);
+        return glm::vec3(r, g, b);
+    }
+
+    // High weight -> Warm (Red/Orange hue 0.0), Low weight -> Cool (Blue hue 0.6)
+    static glm::vec3 GetColorHeatmap(float weight, float maxWeight) {
+        float normalized = (maxWeight > 0.0f) ? (weight / maxWeight) : 0.0f;
+        // Map normalized [0, 1] to hue [0.6, 0.0]
+        float h_value = 0.6f * (1.0f - normalized);
+        return HSLToRGB(h_value, 0.5f, 0.8f);
+    }
 
 
     WordCloud::WordCloud():
@@ -33,104 +65,235 @@ namespace VCX::Labs::labf {
     }
 
     void WordCloud::OnSetupPropsUI() {
-        // === 背景设置 ===
-        bool colorChanged = ImGui::ColorEdit3("背景色", (float*)&_bgColor);
-        bool alphaChanged = ImGui::SliderFloat("透明度", &_bgAlpha, 0.0f, 1.0f, "%.2f");
+         // === 数据源 (Group 1) ===
+        if (ImGui::CollapsingHeader("数据源 (Data Source)", ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (ImGui::BeginTabBar("DataTypeBar")) {
+                if (ImGui::BeginTabItem("文件导入")) {
+                    ImGui::Spacing();
+                    // 显示已选择的文件（可折叠区域）
+                    constexpr size_t kMaxVisibleFiles = 10;  
+                    if (_mdFilePaths.empty()) {
+                        ImGui::TextDisabled("未选择文件");
+                    } else {
+                        ImGui::Text("已选择 %zu 个文件", _mdFilePaths.size());
+                        if (ImGui::TreeNode("查看文件列表")) {
+                            ImGui::PushTextWrapPos(ImGui::GetCursorPos().x + ImGui::GetContentRegionAvail().x - 20);
+                            size_t displayCount = std::min(_mdFilePaths.size(), kMaxVisibleFiles);
+                            for (size_t i = 0; i < displayCount; ++i) {
+                                ImGui::BulletText("%s", _mdFilePaths[i].c_str());
+                            }
+                            if (_mdFilePaths.size() > kMaxVisibleFiles) {
+                                ImGui::TextDisabled("... 还有 %zu 个文件", _mdFilePaths.size() - kMaxVisibleFiles);
+                            }
+                            ImGui::PopTextWrapPos();
+                            ImGui::TreePop();
+                        }
+                    }
 
-        if (colorChanged || alphaChanged) {
-            _recompute = true;
+                    ImGui::Spacing();
+                    
+                    if (ImGui::Button("选择 Markdown 文件", ImVec2(180, 30))) {
+                        auto result = Common::FileDialog::SelectFiles(
+                            "Markdown Files (*.md)\0*.md\0All Files\0*.*\0\0"
+                        );
+                        if (result.has_value() && !result.value().empty()) {
+                            _mdFilePaths = result.value();
+                            _pythonStatusMessage = fmt::format("已选择 {} 个文件", _mdFilePaths.size());
+                        }
+                    }
+
+                    ImGui::SameLine();
+                    if (ImGui::Button("生成词云##File", ImVec2(100, 30))) {
+                        if (_mdFilePaths.empty()) {
+                            _pythonStatusMessage = "请先选择文件";
+                        } else {
+                            // 启动异步任务
+                            _pythonStatusMessage = "正在处理...";
+                            _pythonTaskCompleted = false;
+                            // 使用 lambda 拷贝 filePaths
+                            auto paths = _mdFilePaths;
+                            int k = _topK;
+                            _pythonTask.Emplace([paths, k]() {
+                                return PythonProcessor::ProcessMarkdownBatch(paths, k);
+                            });
+                        }
+                    }
+
+                    ImGui::SameLine();
+                    ImGui::Separator();
+                    ImGui::SameLine();
+                    if (ImGui::Button("清除所有词##File", ImVec2(120, 30))) {
+                        _wm.clear();
+                        _physicsThread.Stop();
+                        _physicsInitialized = false;
+                        _recompute = true;
+                        _pythonStatusMessage = "已清除所有词";
+                    }
+                    ImGui::EndTabItem();
+                }
+
+                if (ImGui::BeginTabItem("文本输入")) {
+                    ImGui::Spacing();
+                    ImGui::Text("请输入用于生成词云的文本：");
+                    
+                    // 使用 InputTextMultiline
+                    // 注意：需要确保 _inputText 容量足够，或者通过 callback 调整
+                    // 为了简化，这里预留较大容量并在必要时使用
+                    if (_inputText.empty()) _inputText.resize(c_MaxInputTextSize, '\0');
+                    else if (_inputText.size() < c_MaxInputTextSize) _inputText.resize(c_MaxInputTextSize, '\0');
+                    
+                    ImGui::InputTextMultiline("##InputText", 
+                        _inputText.data(), 
+                        _inputText.size() - 1,  
+                        ImVec2(-FLT_MIN, 200), 
+                        ImGuiInputTextFlags_AllowTabInput
+                    );
+
+                    ImGui::Spacing();
+                    if (ImGui::Button("生成词云##Text", ImVec2(100, 40))) {
+                        std::string rawText = _inputText.c_str(); 
+                        if (rawText.empty()) {
+                            _pythonStatusMessage = "文本内容为空";
+                        } else {
+                            _pythonStatusMessage = "正在处理文本...";
+                            _pythonTaskCompleted = false;
+
+                            try {
+                                std::string tempPath = "assets/misc/temp_input.md";
+                                std::filesystem::create_directories("assets/misc");
+                                std::ofstream out(tempPath);
+                                out << rawText;
+                                out.close();
+
+                                std::vector<std::string> paths = { tempPath };
+                                int k = _topK;
+                                _pythonTask.Emplace([paths, k]() {
+                                    return PythonProcessor::ProcessMarkdownBatch(paths, k);
+                                });
+                            } catch (const std::exception& e) {
+                                _pythonStatusMessage = fmt::format("文本保存失败: {}", e.what());
+                            }
+                        }
+                    }
+
+                    ImGui::SameLine();
+                    ImGui::Separator();
+                    ImGui::SameLine();
+                    if (ImGui::Button("清除所有词##Text", ImVec2(120, 40))) {
+                        _wm.clear();
+                        _physicsThread.Stop();
+                        _physicsInitialized = false;
+                        _recompute = true;
+                        _pythonStatusMessage = "已清除所有词";
+                    }
+
+                    ImGui::EndTabItem();
+                }
+
+                ImGui::EndTabBar();
+            }
+
+            ImGui::Spacing();
+            ImGui::SliderInt("返回词数", &_topK, 10, 200);
+            
+            if (!_pythonStatusMessage.empty()) {
+                ImGui::TextColored(ImVec4(0.8f, 0.8f, 1.0f, 1.0f), "%s", _pythonStatusMessage.c_str());
+            }
         }
 
-        Common::ImGuiHelper::SaveImage(_texture, c_Size);
-
+        ImGui::Spacing();
         ImGui::Separator();
+        ImGui::Spacing();
 
-        // === 全局角度控制 ===
-        if (ImGui::SliderFloat("锁定角度", &_lockAngle, 0.0f, 360.0f, "%.1f")) {
-            for (auto& w : _wm.items()) {
-                w.orientation = _lockAngle;
-            }
-            // 同步到物理线程：只更新角度，不覆盖其他属性
-            if (_enablePhysics && _physicsThread.IsRunning()) {
-                for (size_t i = 0; i < _wm.items().size(); ++i) {
-                    _physicsThread.UpdateWordOrientation(i, _lockAngle);
+        // === 布局调试与模拟 (Group 2) ===
+        if (ImGui::CollapsingHeader("布局与模拟 (Simulation)", ImGuiTreeNodeFlags_DefaultOpen)) {
+            // 物理控制
+            if (ImGui::Checkbox("启用物理模拟", &_enablePhysics)) {
+                if (_enablePhysics && _physicsInitialized) {
+                     _physicsParams.canvasCenter = glm::vec2(c_Size.first * 0.5f, c_Size.second * 0.5f);
+                    _physicsThread.Start(_wm.items(), _physicsParams);
+                } else {
+                    if (_physicsThread.IsRunning()) {
+                        auto const& currentState = _physicsThread.GetReadBuffer();
+                        auto& items = _wm.items();
+                        for (size_t i = 0; i < std::min(currentState.size(), items.size()); ++i) {
+                            items[i].position = currentState[i].position;
+                            items[i].orientation = currentState[i].orientation;
+                            // ... other properties usually don't change by physics
+                        }
+                    }
+                    _physicsThread.Stop();
                 }
             }
-            _recompute = true;
-        }
 
-        ImGui::Separator();
+            if (_enablePhysics) {
+                ImGui::Indent();
+                if (ImGui::Button("打开物理参数面板")) {
+                    _showPhysicsSettingsWindow = !_showPhysicsSettingsWindow;
+                }
+                ImGui::Unindent();
 
-        // === 物理模拟控制 ===
-        if (ImGui::Checkbox("启用物理", &_enablePhysics)) {
-            if (_enablePhysics && _physicsInitialized) {
-                // 确保参数中心与画布大小对齐（因为初始默认值可能不对）
-                _physicsParams.canvasCenter = glm::vec2(c_Size.first * 0.5f, c_Size.second * 0.5f);
-
-                // 重新启动物理线程，从当前 _wm 状态开始
-                _physicsThread.Start(_wm.items(), _physicsParams);
-            } else {
-                // 停止物理线程前，把当前状态同步回 _wm
-                if (_physicsThread.IsRunning()) {
-                    auto const& currentState = _physicsThread.GetReadBuffer();
-                    auto& items = _wm.items();
-                    for (size_t i = 0; i < std::min(currentState.size(), items.size()); ++i) {
-                        items[i].position = currentState[i].position;
-                        items[i].orientation = currentState[i].orientation;
-                        items[i].fontSize = currentState[i].fontSize;
-                        items[i].color = currentState[i].color;
-                        items[i].boxHalfSize = currentState[i].boxHalfSize;
-                        items[i].useTwoLevelBox = currentState[i].useTwoLevelBox;
-                        items[i].xHeight = currentState[i].xHeight;
-                        items[i].mass = currentState[i].mass;
+                // 物理参数设置窗口 (Modal or separate window logic remains similar)
+                if (_showPhysicsSettingsWindow) {
+                     ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+                    ImGui::SetNextWindowSize(ImVec2(350, 280), ImGuiCond_Always);
+                    ImGui::Begin("物理参数设置", &_showPhysicsSettingsWindow);
+                    bool paramsChanged = false;
+                    paramsChanged |= ImGui::SliderFloat("中心力权重", &_physicsParams.kCenter, 0.0f, 2.0f);
+                    paramsChanged |= ImGui::SliderFloat("邻域力权重", &_physicsParams.kNeighbor, 0.0f, 30.0f);
+                    paramsChanged |= ImGui::SliderFloat("速度阻尼", &_physicsParams.lambda, 0.5f, 0.99f);
+                    paramsChanged |= ImGui::SliderFloat("弹性系数", &_physicsParams.restitution, 0.0f, 1.0f);
+                    float physicsHz = 1.0f / _physicsParams.fixedDt;
+                    if (ImGui::SliderFloat("物理频率", &physicsHz, 30.0f, 240.0f, "%.0f Hz")) {
+                        _physicsParams.fixedDt = 1.0f / physicsHz;
+                        paramsChanged = true;
+                    }
+                    if (paramsChanged) {
+                        _physicsThread.SetParams(_physicsParams);
+                        _physicsThread.ResetSimulator();
+                    }
+                    ImGui::End();
+                }
+            }
+            
+            // 角度控制
+            if (ImGui::SliderFloat("全局角度锁定", &_lockAngle, 0.0f, 360.0f, "%.1f°")) {
+                for (auto& w : _wm.items()) w.orientation = _lockAngle;
+                if (_enablePhysics) {
+                    _physicsThread.Stop();
+                    _physicsParams.canvasCenter = glm::vec2(c_Size.first * 0.5f, c_Size.second * 0.5f);
+                    _physicsThread.Start(_wm.items(), _physicsParams);
+                    _physicsInitialized = true;
+                    if (_enableMask) {
+                        _physicsThread.SetMask(&_mask);
                     }
                 }
-                _physicsThread.Stop();
-            }
-        }
-        if (_enablePhysics) {
-            // 设置按钮显示参数窗口
-            if (ImGui::Button("设置##physics")) {
-                _showPhysicsSettingsWindow = !_showPhysicsSettingsWindow;
-            }
-            ImGui::SameLine();
-            ImGui::Text("物理参数");
-
-            // 物理参数设置窗口
-            if (_showPhysicsSettingsWindow) {
-                ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-                ImGui::SetNextWindowSize(ImVec2(350, 280), ImGuiCond_Always);
-                ImGui::Begin("物理参数设置", &_showPhysicsSettingsWindow);
-                bool paramsChanged = false;
-                paramsChanged |= ImGui::SliderFloat("中心力权重", &_physicsParams.kCenter, 0.0f, 2.0f);
-                paramsChanged |= ImGui::SliderFloat("邻域力权重", &_physicsParams.kNeighbor, 0.0f, 30.0f);
-                paramsChanged |= ImGui::SliderFloat("速度阻尼", &_physicsParams.lambda, 0.5f, 0.99f);
-                paramsChanged |= ImGui::SliderFloat("弹性系数", &_physicsParams.restitution, 0.0f, 1.0f);
-
-                // 物理频率调节（以 Hz 显示，内部转换为 fixedDt）
-                float physicsHz = 1.0f / _physicsParams.fixedDt;
-                if (ImGui::SliderFloat("物理频率", &physicsHz, 30.0f, 240.0f, "%.0f Hz")) {
-                    _physicsParams.fixedDt = 1.0f / physicsHz;
-                    paramsChanged = true;
-                }
-
-                if (paramsChanged) {
-                    _physicsThread.SetParams(_physicsParams);
-                    _physicsThread.ResetSimulator();  // 参数变化时重置 t
-                }
-
-                ImGui::End();
+                _recompute = true;
             }
         }
 
+        ImGui::Spacing();
         ImGui::Separator();
+        ImGui::Spacing();
 
-        // === 字体设置 ===
-        ImGui::Text("词云字体");
-        const auto& fonts = GetWordCloudFonts();
-        if (!fonts.empty() && _currentFontIndex < fonts.size()) {
-            if (ImGui::BeginCombo("##font", fonts[_currentFontIndex].name.c_str())) {
-                for (std::size_t i = 0; i < fonts.size(); ++i) {
+        // === 外观与蒙版 (Group 3) ===
+        if (ImGui::CollapsingHeader("外观与蒙版 (Appearance)", ImGuiTreeNodeFlags_DefaultOpen)) {
+            // 背景设置
+            ImGui::Text("背景设置:");
+            ImGui::SameLine();
+            if (ImGui::ColorEdit3("##BGColor", (float*)&_bgColor, ImGuiColorEditFlags_NoInputs)) _recompute = true;
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(100);
+            if (ImGui::SliderFloat("透明度", &_bgAlpha, 0.0f, 1.0f, "%.2f")) _recompute = true;
+
+            Common::ImGuiHelper::SaveImage(_texture, c_Size, true);
+            
+            ImGui::Spacing();
+
+            // 字体选择
+            const auto& fonts = GetWordCloudFonts();
+            if (ImGui::BeginCombo("字体选择", (_currentFontIndex < fonts.size() ? fonts[_currentFontIndex].name.c_str() : "None"))) {
+                 for (std::size_t i = 0; i < fonts.size(); ++i) {
                     if (ImGui::Selectable(fonts[i].name.c_str(), i == _currentFontIndex)) {
                         if (i != _currentFontIndex) {
                             _currentFontIndex = i;
@@ -153,118 +316,36 @@ namespace VCX::Labs::labf {
                 }
                 ImGui::EndCombo();
             }
-        } else {
-            ImGui::TextDisabled("未找到字体");
-        }
 
-        ImGui::Separator();
+            ImGui::Spacing();
 
-        // === 蒙版设置 ===
-        ImGui::Text("蒙版设置");
-        if (ImGui::Checkbox("启用蒙版", &_enableMask)) {
-            if (_enableMask && !_mask.IsValid()) {
-                // 尝试加载蒙版
-                if (!_mask.Load(c_MaskPath, glm::ivec2(c_Size.first, c_Size.second))) {
-                    _enableMask = false;
-                    _pythonStatusMessage = "蒙版加载失败";
+            // 蒙版设置
+            if (ImGui::Checkbox("启用蒙版约束", &_enableMask)) {
+                if (_enableMask && !_mask.IsValid()) {
+                    if (!_mask.Load(c_MaskPath, glm::ivec2(c_Size.first, c_Size.second))) {
+                        _enableMask = false;
+                        _pythonStatusMessage = "蒙版加载失败";
+                    }
                 }
+                _physicsThread.SetMask(_enableMask ? &_mask : nullptr);
+               _physicsThread.ResetSimulator();
+                _recompute = true;
             }
-            // 设置蒙版到物理线程
-            _physicsThread.SetMask(_enableMask ? &_mask : nullptr);
-            // 重置模拟
-            _physicsThread.ResetSimulator();
-            _recompute = true;
-        }
-        if (ImGui::Checkbox("显示蒙版边界", &_showMaskBoundary)) {
-            _recompute = true;
+            if (_enableMask) {
+                ImGui::SameLine();
+                if (ImGui::Checkbox("显示边界", &_showMaskBoundary)) _recompute = true;
+                ImGui::SameLine();
+                ImGui::Checkbox("显示碰撞力", &_showMaskCollisionInfo);
+            }
         }
 
+        ImGui::Spacing();
         ImGui::Separator();
+        ImGui::Spacing();
 
-        // === 调试选项 ===
-        ImGui::Checkbox("显示碰撞框", &_showCollisionBox);
-
-        ImGui::Separator();
-
-        // === 从 Markdown 文件生成词云 ===
-        ImGui::Text("从 Markdown 文件生成词云");
-
-        // 显示已选择的文件（可折叠区域）
-        constexpr size_t kMaxVisibleFiles = 10;  // 最多显示的文件数量
-        if (_mdFilePaths.empty()) {
-            ImGui::TextDisabled("未选择文件");
-        } else {
-            ImGui::Text("已选择 %zu 个文件", _mdFilePaths.size());
-
-            // 使用可折叠区域显示文件列表
-            if (ImGui::CollapsingHeader("查看文件列表")) {
-                ImGui::PushTextWrapPos(ImGui::GetCursorPos().x + ImGui::GetContentRegionAvail().x - 20);
-
-                size_t displayCount = std::min(_mdFilePaths.size(), kMaxVisibleFiles);
-                for (size_t i = 0; i < displayCount; ++i) {
-                    ImGui::BulletText("%s", _mdFilePaths[i].c_str());
-                }
-
-                // 如果文件太多，显示省略提示
-                if (_mdFilePaths.size() > kMaxVisibleFiles) {
-                    ImGui::TextDisabled("... 还有 %zu 个文件", _mdFilePaths.size() - kMaxVisibleFiles);
-                }
-
-                ImGui::PopTextWrapPos();
-            }
-        }
-
-        // 词数滑条
-        ImGui::SliderInt("返回词数", &_topK, 10, 200);
-
-        ImVec2 buttonSize = ImVec2(120, 30);
-        if (ImGui::Button("选择文件", buttonSize)) {
-            auto result = Common::FileDialog::SelectFiles(
-                "选择 Markdown 文件",
-                { {"Markdown", "*.md"}, {"All Files", "*.*"} }
-            );
-            if (result.has_value()) {
-                _mdFilePaths = result.value();
-            }
-        }
-
-        ImGui::SameLine();
-
-        if (ImGui::Button("生成词云", buttonSize)) {
-            if (!_mdFilePaths.empty()) {
-                _pythonStatusMessage = "处理中...";
-                _pythonTask.Reset();
-                // 按值捕获，避免异步任务访问已修改的引用
-                auto filePaths = _mdFilePaths;
-                int topK = _topK;
-                _pythonTask.Emplace([filePaths, topK]() {
-                    return PythonProcessor::ProcessMarkdownBatch(filePaths, topK);
-                });
-                _pythonTaskCompleted = false;
-            } else {
-                _pythonStatusMessage = "请先选择文件";
-            }
-        }
-
-        // 显示状态消息
-        if (!_pythonStatusMessage.empty()) {
-            ImGui::SameLine();
-            ImGui::Text("%s", _pythonStatusMessage.c_str());
-        }
-
-        ImGui::Separator();
-
-        // === 清空词云 ===
-        ImVec2 clearButtonSize = ImVec2(120, 30);
-        if (ImGui::Button("清空词云", clearButtonSize)) {
-            // 停止物理线程
-            _physicsThread.Stop();
-            _physicsInitialized = false;
-            // 清空词云
-            _wm.clear();
-            _pythonResult.clear();
-            _pythonStatusMessage = "已清空词云";
-            _recompute = true;
+        // === 调试选项 (Group 4) ===
+        if (ImGui::CollapsingHeader("调试 (Debug)")) {
+             ImGui::Checkbox("显示碰撞包围盒 (OBB)", &_showCollisionBox);
         }
 
         // 处理完成结果
@@ -284,8 +365,8 @@ namespace VCX::Labs::labf {
                 }
 
                 // 对数平滑映射参数
-                constexpr float SizeMin = 20.0f;  // 最小字号 (Reduced from 30.0f)
-                constexpr float SizeMax = 75.0f;  // 最大字号
+                constexpr float SizeMin = 25.0f;  // 最小字号 (Reduced from 30.0f)
+                constexpr float SizeMax = 80.0f;  // 最大字号
                 constexpr float LogOffset = 1.0f; // log(v + 1) 中的 +1 偏移
 
                 // 预计算分母，避免重复计算
@@ -302,6 +383,10 @@ namespace VCX::Labs::labf {
                     float fontSize = SizeMin + (SizeMax - SizeMin) * normalized;
 
                     auto& w = _wm.add(r.text, fontSize);
+
+                    // Apply Heatmap Color Strategy B
+                    glm::vec3 colorRGB = GetColorHeatmap(r.weight, maxWeight);
+                    w.color = glm::vec4(colorRGB, 1.0f);
 
                     // 先初始化 OBB（使用像素单位，scale=1.0，确保渲染和碰撞检测尺度一致）
                     float ppp = _physicsParams.pixelsPerUnit > 0 ? _physicsParams.pixelsPerUnit : 30.0f;
@@ -321,29 +406,36 @@ namespace VCX::Labs::labf {
 
                     // 排除当前词（索引为 _wm.items().size() - 1）
                     // 根据是否启用蒙版选择布局函数
+                    int iterations = 0;
+                    bool foundPosition = false;
+                    std::size_t currentIdx = _wm.items().size() - 1;
                     if (_enableMask) {
-                        SpiralLayout::FindNonCollidingSpiralPositionWithMask(
+                        foundPosition = SpiralLayout::FindNonCollidingSpiralPositionWithMask(
                             w, _wm.items(),
-                            _wm.items().size() - 1,  // 排除新添加的词
+                            currentIdx,  // 排除新添加的词
                             canvasCenter,
                             spiralA, spiralB, angularOffset,
                             _mask,  // 传入蒙版
                             spiralPos,
-                            100000  // 大幅增加尝试次数，配合自适应步长
+                            iterations
                         );
                     } else {
-                        SpiralLayout::FindNonCollidingSpiralPosition(
+                        foundPosition = SpiralLayout::FindNonCollidingSpiralPosition(
                             w, _wm.items(),
-                            _wm.items().size() - 1,  // 排除新添加的词
+                            currentIdx,  // 排除新添加的词
                             canvasCenter,
                             spiralA, spiralB, angularOffset,
                             spiralPos,
-                            100000  // 大幅增加尝试次数
+                            iterations
                         );
                     }
 
-                    // 无论是否找到（返回 true/false），都使用最后计算的 spiralPos
-                    // 修改后的 FindNonCollidingSpiralPosition 会在失败时保留最外圈位置
+                    // 如果迭代次数超过阈值，跳过该词不渲染
+                    if (!foundPosition) {
+                        _wm.remove(currentIdx);
+                        continue;
+                    }
+
                     w.position = spiralPos;
                     w.orientation = 0.0f;  // 水平方向
 
@@ -404,6 +496,10 @@ namespace VCX::Labs::labf {
         // 使用 GPU 渲染器渲染文字到 FBO（支持旋转），传入背景颜色
         glm::vec4 bgColorVec(_bgColor.x, _bgColor.y, _bgColor.z, _bgAlpha);
         auto& textTexture = _wordCloudRenderer->RenderAllWords(*renderWordsPtr, c_Size, bgColorVec);
+
+        // 保存渲染结果到 _texture（供保存图片使用）
+        auto textureData = textTexture.Download<Engine::Formats::RGBA8>();
+        _texture.Update(textureData);
 
         // Gizmo 绘制已移动到 OnProcessInput，因为需要在 Image 绘制之后才能获得正确的坐标
 
@@ -597,7 +693,7 @@ namespace VCX::Labs::labf {
         // ============================================================
         // 渲染调试碰撞点
         // ============================================================
-        {
+        if (_showMaskCollisionInfo) {
             ImDrawList* dl = ImGui::GetForegroundDrawList();
             float dt = ImGui::GetIO().DeltaTime;
             
@@ -633,6 +729,8 @@ namespace VCX::Labs::labf {
                     ++it;
                 }
             }
+        } else {
+             _debugPoints.clear();
         }
     }
 

@@ -16,64 +16,49 @@ namespace VCX::Labs::labf {
     // 文字测量回调类型
     using MeasureTextFunc = std::function<glm::vec2(const std::string&, float)>;
 
-    //=========================================================================
-    // Gizmo State（使用索引而非指针）
-    //=========================================================================
+    // Gizmo State
+    // ============================================================
 
     struct GizmoState {
-        std::vector<size_t> selectedIndices;  // 选中的词索引列表
+        std::vector<size_t> selectedIndices;
 
-        // 拖动状态
         enum class DragMode { None, Move, Scale, Rotate };
         DragMode dragMode = DragMode::None;
 
-        // 缩放相关
         int activeCorner = -1;
         glm::vec2 dragStartPos {0, 0};
         std::vector<float> dragStartFontSizes;
 
-        // 旋转相关
         float lastMouseAngle = 0.f;
         std::vector<float> dragStartOrientations;
-        ImVec2 rotateCenter {0, 0};  // 旋转时固定的中心点（屏幕坐标）
+        ImVec2 rotateCenter {0, 0};
     };
 
-    // 交互结果（增量变化）
+    // Interaction Result
+    // ============================================================
+
     struct InteractionResult {
         bool handled = false;
 
         enum class ChangeType { None, Select, Deselect, Move, Scale, Rotate };
         ChangeType changeType = ChangeType::None;
 
-        // 变更的词索引
         std::vector<size_t> changedIndices;
-
-        // 高亮变化（Select/Deselect）
-        std::vector<size_t> highlightOn;   // 新增高亮
-        std::vector<size_t> highlightOff;  // 取消高亮
-
-        // 位移增量（Move）
+        std::vector<size_t> highlightOn;
+        std::vector<size_t> highlightOff;
         glm::vec2 positionDelta { 0, 0 };
-
-        // 角度增量（Rotate）
         float orientationDelta = 0.0f;
-
-        // 缩放比例（Scale）
         float scaleFactor = 1.0f;
-
-        // 新字号和 boxHalfSize（Scale）
-        std::vector<std::pair<float, glm::vec2>> newFontSizes;  // (fontSize, boxHalfSize)
+        std::vector<std::pair<float, glm::vec2>> newFontSizes;
     };
 
-    //=========================================================================
     // Hit Zone
-    //=========================================================================
+    // ============================================================
 
     enum class HitZone { None, Body, Rotate, Corner0, Corner1, Corner2, Corner3 };
 
-    //=========================================================================
     // Helper Functions
-    //=========================================================================
+    // ============================================================
 
     inline void DrawDashedLine(ImDrawList* dl, ImVec2 p1, ImVec2 p2, ImU32 col, float thickness = 1.5f, float dashLen = 5.0f) {
         ImVec2 dir = ImVec2(p2.x - p1.x, p2.y - p1.y);
@@ -112,9 +97,8 @@ namespace VCX::Labs::labf {
                (c0 <= 0 && c1 <= 0 && c2 <= 0 && c3 <= 0);
     }
 
-    //=========================================================================
-    // Collision Box Drawing (调试用)
-    //=========================================================================
+    // Collision Box Drawing
+    // ============================================================
 
     // 绘制 OBB（用红色实线）
     inline void DrawOBB(ImDrawList* dl, ImVec2 canvasOrigin, float canvasHeight, OBB const& obb, ImU32 color) {
@@ -168,7 +152,7 @@ namespace VCX::Labs::labf {
                 letterOBB.center = w.position + rotatedCenter;
                 letterOBB.halfSize = letter.halfSize;
                 letterOBB.rotation = rad;
-                DrawOBB(dl, canvasOrigin, canvasHeight, letterOBB, orangeColor);
+            DrawOBB(dl, canvasOrigin, canvasHeight, letterOBB, orangeColor);
             }
         } else {
             // 普通：显示 collisionHalfSize
@@ -180,9 +164,8 @@ namespace VCX::Labs::labf {
         }
     }
 
-    //=========================================================================
     // Gizmo Drawing
-    //=========================================================================
+    // ============================================================
 
     inline void DrawGizmo(ImDrawList* dl, ImVec2 canvasOrigin, float canvasHeight, const WordEntity& w) {
         auto toScreen = [&](glm::vec2 p) {
@@ -218,9 +201,8 @@ namespace VCX::Labs::labf {
         }
     }
 
-    //=========================================================================
     // Hit Testing
-    //=========================================================================
+    // ============================================================
 
     inline HitZone HitTestGizmo(ImVec2 mousePos, ImVec2 canvasOrigin, float canvasHeight, const WordEntity& w) {
         auto toScreen = [&](glm::vec2 p) {
@@ -292,12 +274,11 @@ namespace VCX::Labs::labf {
         return PointInRotatedRect(mousePos, corners);
     }
 
-    //=========================================================================
-    // Main Interaction Handler（返回增量变化）
-    //=========================================================================
+    // Main Interaction Handler
+    // ============================================================
 
     inline InteractionResult HandleWordGizmo(
-        std::vector<WordEntity> const& words,  // 只读
+        std::vector<WordEntity> const& words,
         GizmoState& state,
         ImVec2 canvasOrigin,
         ImVec2 canvasSize,

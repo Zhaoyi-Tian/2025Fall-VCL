@@ -93,7 +93,6 @@ namespace VCX::Labs::labf {
         return false;
     }
 
-    // ============================================================
     // JFA SDF 生成算法
     // ============================================================
 
@@ -201,46 +200,31 @@ namespace VCX::Labs::labf {
         float offsetY = (_canvasSize.y - scaledHeight) * 0.5f;
 
         // 转换到局部像素坐标
-        // 注意：localX, localY 指的是在 mask 图片空间中的连续坐标
-        // 像素中心的坐标应该是 0.5, 1.5, 2.5 ...
-        // 但 stbi/texture采样 通常把 (0,0) 视为 top-left 像素的中心或角点，取决于约定
-        // 这里 JFA 计算出的 SDF 是定义在整数网格点上的（像素中心）
         float localX = (pos.x - offsetX) / _scale;
         float localY = (pos.y - offsetY) / _scale;
 
-        // 如果点在图片范围外，直接返回一个很大的正值（外部）
+        // 边界检查
         if (localX < 0 || localX >= _imageSize.x - 1 || localY < 0 || localY >= _imageSize.y - 1) {
-             // 简单的距离估算：到图片中心的距离减去图片半径？或者直接返回 max
-             // 为了避免边界处的跳变，这里应该做得更平滑，但为了简单起见，
-             // 对于完全超出范围的点，我们认为它深深地在外部。
-             return 1000.0f; 
+             return 1000.0f;  // 外部点
         }
 
         // 双线性插值
-        // 找到左上角的网格点 (x0, y0)
-        // 例如 localX = 5.2，则 x0 = 5, x1 = 6，插值权重 fx = 0.2
         int x0 = static_cast<int>(floor(localX));
         int y0 = static_cast<int>(floor(localY));
         int x1 = x0 + 1;
         int y1 = y0 + 1;
 
-        // x0, y0 必须在合法范围内
-        // 由于前面的 if 限定，这里 x0, y0 最大为 size-2，所以 x1, y1 最大为 size-1，安全
-        
         float fx = localX - x0;
         float fy = localY - y0;
 
-        // 获取四个角点的 SDF 值
         float d00 = GetSDFDistance(x0, y0);
         float d10 = GetSDFDistance(x1, y0);
         float d01 = GetSDFDistance(x0, y1);
         float d11 = GetSDFDistance(x1, y1);
 
-        // 先对 x 方向插值
         float d0 = d00 * (1.0f - fx) + d10 * fx;
         float d1 = d01 * (1.0f - fx) + d11 * fx;
-        
-        // 再对 y 方向插值
+
         float dist = d0 * (1.0f - fy) + d1 * fy;
 
         // 转换回画布尺度的距离

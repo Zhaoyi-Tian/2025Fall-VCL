@@ -44,13 +44,10 @@ namespace VCX::Labs::labf {
         bool _enableZoom     = false;  // 默认禁用 zoom tooltip
         bool _enableLeftDrag = true;   // 默认启用左键拖动
         bool _showCollisionBox = false; // 显示碰撞框（调试用）
+        bool _showMaskCollisionInfo = false; // 显示蒙版碰撞信息（碰撞点和力）
         bool _recompute      = true;
         ImVec4 _bgColor = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
         float _bgAlpha = 1.0f;
-
-        int        _selectIdx = -1;
-        glm::ivec2 _lineP0 { 10, 20 };
-        glm::ivec2 _lineP1 { 300, 290 };
 
         // 词云管理器：管理画布上的所有 WordEntity
         labf::WordManager _wm;
@@ -83,6 +80,7 @@ namespace VCX::Labs::labf {
         // Markdown 文件处理
         std::vector<std::string> _mdFilePaths;
         int _topK = 100;
+        std::string _inputText = ""; // 输入文本缓冲区
         Engine::Async<std::vector<WordResult>> _pythonTask;
         std::vector<WordResult> _pythonResult;
         std::string _pythonStatusMessage = "";

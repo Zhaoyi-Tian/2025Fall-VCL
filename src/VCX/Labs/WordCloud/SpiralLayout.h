@@ -34,6 +34,8 @@ namespace VCX::Labs::labf {
         }
 
         // 查找不碰撞的螺旋线位置
+        // 返回值：true=找到无碰撞位置，false=超过最大迭代次数或无法找到位置
+        // 输出迭代次数到 outIterations
         static bool FindNonCollidingSpiralPosition(
             WordEntity const& newWord,
             std::vector<WordEntity> const& existingWords,
@@ -43,11 +45,14 @@ namespace VCX::Labs::labf {
             float spiralB,
             float angularOffset,
             glm::vec2& outPosition,
-            int maxAttempts = 1000)
+            int& outIterations,
+            int maxIterations = 100000)
         {
-            if (maxAttempts <= 0) maxAttempts = 1000;
+            int maxAttempts = maxIterations;
+            if (maxAttempts <= 0) maxAttempts = 100000;
 
             for (int attempt = 0; attempt < maxAttempts; ++attempt) {
+                outIterations = attempt;
                 // 标准阿基米德螺旋线：theta 随尝试次数线性增加
                 // 这样可以确保从小到大均匀向外搜索，而不会受 totalWords 影响导致搜索范围过小
                 float theta = attempt * angularOffset;
@@ -103,6 +108,8 @@ namespace VCX::Labs::labf {
 
         // 带蒙版检查的螺旋线布局
         // 只接受在蒙版区域内的位置
+        // 返回值：true=找到无碰撞位置，false=超过最大迭代次数或无法找到位置
+        // 输出迭代次数到 outIterations
         static bool FindNonCollidingSpiralPositionWithMask(
             WordEntity const& newWord,
             std::vector<WordEntity> const& existingWords,
@@ -113,17 +120,20 @@ namespace VCX::Labs::labf {
             float angularOffset,
             Mask const& mask,
             glm::vec2& outPosition,
-            int maxAttempts = 30000)
+            int& outIterations,
+            int maxIterations = 100000)
         {
-            if (maxAttempts <= 0) maxAttempts = 30000;
+            int maxAttempts = maxIterations;
+            if (maxAttempts <= 0) maxAttempts = 100000;
 
             float theta = 0.0f;
             // 使用均匀弧长步长，避免外圈搜索过疏
             // 步长与词的大小相关，取 min(halfSize) 的一部分，确保不漏掉缝隙
             float arcStep = std::min(newWord.boxHalfSize.x, newWord.boxHalfSize.y);
-            arcStep = std::clamp(arcStep, 2.0f, 10.0f);
+            arcStep = std::clamp(arcStep, 0.5f, 3.0f);  // 减小步长，进行更密集的搜索
 
             for (int attempt = 0; attempt < maxAttempts; ++attempt) {
+                outIterations = attempt;
                 // 标准阿基米德螺旋线
                 // theta 由弧长控制递增
                 float r     = spiralA + spiralB * theta;
