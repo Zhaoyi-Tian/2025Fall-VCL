@@ -1,6 +1,3 @@
----
-typora-root-url: ./
----
 
 # VCL报告：lab2:
 
